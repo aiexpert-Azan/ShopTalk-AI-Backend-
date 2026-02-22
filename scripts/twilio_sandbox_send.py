@@ -1,7 +1,16 @@
+import os
 from twilio.rest import Client
+from dotenv import load_dotenv
 
-account_sid = 'ACe5c13671a538aff4396f6fd0b772f201'
-auth_token = '097f6740c0f56046336ff7440f418f34'
+# Load environment variables from .env file
+load_dotenv()
+
+account_sid = os.getenv('TWILIO_ACCOUNT_SID')
+auth_token = os.getenv('TWILIO_AUTH_TOKEN')
+
+if not account_sid or not auth_token:
+    raise ValueError("TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be set in .env file")
+
 client = Client(account_sid, auth_token)
 
 message = client.messages.create(
