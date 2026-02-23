@@ -231,7 +231,7 @@ def send_reset_code_email(email: str, code: str):
     """
     
     message = Mail(
-        from_email=settings.FROM_EMAIL,
+        from_email=settings.SENDGRID_FROM_EMAIL
         to_emails=email,
         subject="ShopTalk AI - Password Reset Code",
         html_content=html_content
