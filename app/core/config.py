@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # Email Service (SendGrid)
     SENDGRID_API_KEY: Optional[str] = None
-    SENDGRID_FROM_EMAIL: str = "noreply@shoptalk.ai"
+    SENDGRID_FROM_EMAIL: str = "aiexpert.azan@gmail.com"
 
     # JWT & Security
     JWT_SECRET_KEY: str

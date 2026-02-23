@@ -93,31 +93,75 @@ async def get_conversation_history(
 
 @router.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
-    # Twilio sends form data, not JSON usually for creating messages, but for status callbacks it might vary.
-    # Receiving messages: Twilio posts 'Body', 'From', 'To', etc. as Form Data.
-    
     form_data = await request.form()
     incoming_msg = form_data.get('Body', '').strip()
-    sender = form_data.get('From', '') # e.g., whatsapp:+1234567890
-    
-    # Verify signature if needed (X-Twilio-Signature header + auth token)
-    # For MVP/Demo, skipping strict signature validation but it's recommended.
+    sender = form_data.get('From', '')
     
     if not incoming_msg:
         return {"status": "no message"}
+    
+    logger.info(f"Received message from {sender}: {incoming_msg}")
+    
+    # 1. Customer phone number extract karo
+    customer_phone = sender.replace("whatsapp:", "")
+    
+    # 2. Database se shop dhundo
+    # Abhi sirf pehli shop use kar rahe hain testing ke liye
+    shop = await db.get_db().shops.find_one({})
+    
+    if shop:
+        shop_name = shop.get("name", "Our Shop")
+        shop_description = shop.get("description", "")
+        products = shop.get("products", [])
         
-    print(f"Received message from {sender}: {incoming_msg}")
+        shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
+{shop_description}
+
+You help customers with:
+- Product inquiries and availability
+- Taking orders
+- Answering questions about the shop
+- Providing pricing information
+
+Always be polite, helpful and respond in the same language the customer uses.
+If customer writes in Urdu, respond in Urdu. If in English, respond in English."""
+    else:
+        shop_context = "You are a helpful shop assistant. Help customers with their orders and inquiries."
     
-    # 1. Identify shop/user (simplified: assumption or lookup)
-    shop_context = "You are a helpful assistant." 
+    # 3. Conversation history fetch karo
+    conversation = await db.get_db().conversations.find_one({
+        "customerPhone": customer_phone
+    })
+    history = conversation.get("messages", []) if conversation else []
     
-    # 2. Get history (mock or DB)
-    history = []
+    # 4. AI response generate karo
+    try:
+        response_text = await ai_service.generate_response(
+            shop_context=shop_context,
+            history=history,
+            user_message=incoming_msg
+        )
+    except Exception as e:
+        logger.error(f"AI error: {e}")
+        response_text = "Sorry, I'm having trouble right now. Please try again later."
     
-    # 3. Generate AI response
-    response_text = await ai_service.generate_response(shop_context, history, incoming_msg)
+    # 5. Conversation history save karo
+    new_messages = history + [
+        {"role": "user", "content": incoming_msg},
+        {"role": "assistant", "content": response_text}
+    ]
     
-    # 4. Send response back via Twilio
+    await db.get_db().conversations.update_one(
+        {"customerPhone": customer_phone},
+        {"$set": {
+            "customerPhone": customer_phone,
+            "messages": new_messages[-20:],  # Last 20 messages rakhna
+            "updatedAt": datetime.utcnow()
+        }},
+        upsert=True
+    )
+    
+    # 6. Twilio se reply bhejo
     from app.services.twilio_service import twilio_service
     twilio_service.send_whatsapp_message(sender, response_text)
     
