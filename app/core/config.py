@@ -21,10 +21,11 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT_NAME: str = "gpt-4"
     AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
 
-    # Twilio (WhatsApp)
+    # Twilio (WhatsApp, SMS, Verify)
     TWILIO_ACCOUNT_SID: Optional[str] = None
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_WHATSAPP_NUMBER: Optional[str] = None
+    TWILIO_VERIFY_SERVICE_SID: Optional[str] = None
 
     # Email Service (SendGrid)
     SENDGRID_API_KEY: Optional[str] = None
