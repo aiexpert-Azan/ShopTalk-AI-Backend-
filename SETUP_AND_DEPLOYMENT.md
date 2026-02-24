@@ -59,32 +59,37 @@ ShopTalk AI backend has been updated with a complete phone-based authentication 
 ### Required (.env file)
 
 ```env
-# Twilio Configuration
-TWILIO_ACCOUNT_SID=ACe5c13671a538aff4396f6fd0b772f201
-TWILIO_AUTH_TOKEN=cc19406da597b8c6e164f7b69fdf8650
-TWILIO_VERIFY_SERVICE_SID=VA12a601cc8def008d73e853f8b4c91e8f
+# Twilio Configuration (Get from Twilio Console)
+TWILIO_ACCOUNT_SID=your_account_sid_here
+TWILIO_AUTH_TOKEN=your_auth_token_here
+TWILIO_VERIFY_SERVICE_SID=your_verify_service_sid_here
 
-# Azure Cosmos DB
-COSMOS_HOST=shoptalk-cluster.mongocluster.cosmos.azure.com
-COSMOS_USERNAME=azanshoptalkai
-COSMOS_PASSWORD=Az%nxh2610
+# Azure Cosmos DB (Get from Azure Portal)
+COSMOS_HOST=your_cosmos_host_here
+COSMOS_USERNAME=your_cosmos_username_here
+COSMOS_PASSWORD=your_cosmos_password_here
 COSMOS_DB_NAME=shoptalk-cluster
 
-# Azure OpenAI
-AZURE_OPENAI_API_KEY=your_api_key
-AZURE_OPENAI_ENDPOINT=https://shoptalkai-app.openai.azure.com
+# Azure OpenAI (Get from Azure OpenAI Dashboard)
+AZURE_OPENAI_API_KEY=your_openai_api_key_here
+AZURE_OPENAI_ENDPOINT=your_openai_endpoint_here
 AZURE_OPENAI_DEPLOYMENT_NAME=gpt-4o-mini
 
-# JWT & Security
-JWT_SECRET_KEY=09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7
+# JWT & Security (Generate random strings)
+JWT_SECRET_KEY=generate_random_256_bit_secret_key_here
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24
 REFRESH_TOKEN_EXPIRATION_DAYS=7
 
-# Email (kept for future use, not needed for current auth)
-SENDGRID_API_KEY=SG.xxx
-SENDGRID_FROM_EMAIL=aiexpert.azan@gmail.com
+# Email Service (Optional - kept for future use)
+SENDGRID_API_KEY=your_sendgrid_api_key_here
+SENDGRID_FROM_EMAIL=your_email@example.com
 ```
+
+⚠️ **IMPORTANT:** Replace all placeholder values with your actual credentials from:
+- Twilio Console: https://console.twilio.com/
+- Azure Portal: https://portal.azure.com/
+- SendGrid Dashboard: https://app.sendgrid.com/
 
 ### Getting Twilio Credentials
 

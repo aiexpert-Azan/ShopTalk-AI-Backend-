@@ -9,11 +9,11 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
     
-    # Azure Cosmos DB
-    COSMOS_HOST: str = "shoptalk-cluster.mongocluster.cosmos.azure.com"
-    COSMOS_USERNAME: str = "azanshoptalkai"
-    COSMOS_PASSWORD: str = "Az%nxh2610"
-    COSMOS_DB_NAME: str = "shoptalk-cluster"
+    # Azure Cosmos DB (loaded from .env, never hardcode passwords)
+    COSMOS_HOST: Optional[str] = None
+    COSMOS_USERNAME: Optional[str] = None
+    COSMOS_PASSWORD: Optional[str] = None
+    COSMOS_DB_NAME: Optional[str] = None
 
     # Azure OpenAI
     AZURE_OPENAI_API_KEY: str

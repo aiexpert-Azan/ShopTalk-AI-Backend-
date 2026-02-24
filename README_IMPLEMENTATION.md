@@ -138,14 +138,17 @@ git push origin main
 
 ## 📋 Configuration Check
 
-Your `.env` file already has:
+Your `.env` file should have these Twilio credentials configured:
 ```env
-TWILIO_ACCOUNT_SID=ACe5c13671a538aff4396f6fd0b772f201
-TWILIO_AUTH_TOKEN=cc19406da597b8c6e164f7b69fdf8650
-TWILIO_VERIFY_SERVICE_SID=VA12a601cc8def008d73e853f8b4c91e8f
+TWILIO_ACCOUNT_SID=your_account_sid_from_twilio_console
+TWILIO_AUTH_TOKEN=your_auth_token_from_twilio_console
+TWILIO_VERIFY_SERVICE_SID=your_verify_service_sid_from_twilio_console
 ```
 
-✅ **All Twilio credentials are configured and ready to use!**
+⚠️ **IMPORTANT:** 
+- Never commit `.env` with real credentials to git
+- `.env` is in `.gitignore` - keep it local only
+- Use the actual values from your Twilio account
 
 ---
 

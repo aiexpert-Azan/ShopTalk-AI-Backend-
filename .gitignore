@@ -2,20 +2,39 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg-info/
+dist/
+build/
 
 # Virtual environments
 .venv/
 venv/
 env/
 .venv-1/
+.env-1/
 
-# Environment files
+# Environment files (CRITICAL: Keep secrets out of git)
 .env
-.env.*
+.env.local
+.env.development
+.env.production
+.env.*.local
+*.env
+
+# Credentials and Secrets
+**/credentials.json
+**/secrets.json
+**/*_secret.py
+**/*-secret.*
+**/config_secret.py
 
 # IDEs
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
 # OS
 Thumbs.db
@@ -23,3 +42,13 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json

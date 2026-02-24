@@ -92,15 +92,17 @@ GET /api/auth/profile
 
 ### Environment Variables (.env)
 ```env
-TWILIO_ACCOUNT_SID=ACe5c13671a538aff4396f6fd0b772f201
-TWILIO_AUTH_TOKEN=cc19406da597b8c6e164f7b69fdf8650
-TWILIO_VERIFY_SERVICE_SID=VA12a601cc8def008d73e853f8b4c91e8f
+TWILIO_ACCOUNT_SID=your_account_sid_here
+TWILIO_AUTH_TOKEN=your_auth_token_here
+TWILIO_VERIFY_SERVICE_SID=your_verify_service_sid_here
 ```
+
+⚠️ **Never commit .env with real credentials!** Keep it in .gitignore and add values locally only.
 
 ### Check Config (Python)
 ```python
 from app.core.config import settings
-print(settings.TWILIO_VERIFY_SERVICE_SID)  # Should print: VA12a601cc8def008d73e853f8b4c91e8f
+print(settings.TWILIO_VERIFY_SERVICE_SID)  # Should print your service SID
 ```
 
 ---
