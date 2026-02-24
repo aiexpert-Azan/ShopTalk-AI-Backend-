@@ -5,12 +5,11 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 class UserBase(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=30)
     phone: str = Field(..., min_length=11, max_length=11)
-    email: EmailStr
+    email: Optional[EmailStr] = None
 
     @field_validator('phone')
     @classmethod
     def validate_pakistani_phone(cls, v: str) -> str:
-        """Validate Pakistani mobile number format."""
         if not v.isdigit():
             raise ValueError("Phone number must contain only digits")
         if len(v) != 11:
