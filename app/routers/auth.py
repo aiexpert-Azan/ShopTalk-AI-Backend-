@@ -16,6 +16,7 @@ router = APIRouter()
 
 # In-memory storage for signup OTP verification
 signup_phone_otps: dict = {}  # {phone: {otp_verified: bool, user_data: {}}}
+reset_phone_otps: dict = {}  # track reset OTPs when mocking
 
 # --- Pydantic Models ---
 class ForgotPasswordRequest(BaseModel):
@@ -37,7 +38,7 @@ class ResetOTPResponse(BaseModel):
 class SendSignupOTPRequest(BaseModel):
     phone: str
     # FIX: Email ko optional kiya aur empty string handle karne ke liye validator lagaya
-    email: Optional[EmailStr] = None 
+    email: Optional[EmailStr] = None
     name: str
     password: str
 
@@ -111,12 +112,8 @@ async def send_signup_otp(request: SendSignupOTPRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered")
     
     international_phone = f"+92{phone[1:]}"
-    try:
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        verification = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verifications.create(
-            to=international_phone, channel="sms"
-        )
-        
+    # Mock mode: do not call Twilio, just store the pending signup and log OTP
+    if settings.MOCK_OTP_MODE:
         signup_phone_otps[phone] = {
             "otp_verified": False,
             "user_data": {
@@ -124,11 +121,28 @@ async def send_signup_otp(request: SendSignupOTPRequest):
                 "email": request.email,
                 "name": request.name,
                 "password": request.password
-            }
+            },
+            "mock_otp": "123456"
         }
-    except Exception as e:
-        logger.error(f"Twilio Error: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
+        logger.warning(f"MOCK MODE: OTP for {phone} is 123456")
+    else:
+        try:
+            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            verification = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verifications.create(
+                to=international_phone, channel="sms"
+            )
+            signup_phone_otps[phone] = {
+                "otp_verified": False,
+                "user_data": {
+                    "phone": phone,
+                    "email": request.email,
+                    "name": request.name,
+                    "password": request.password
+                }
+            }
+        except Exception as e:
+            logger.error(f"Twilio Error: {str(e)}")
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
     
     return SendSignupOTPResponse(message="OTP sent", phone=phone)
 
@@ -139,6 +153,32 @@ async def verify_signup_otp(request: VerifySignupOTPRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request OTP first")
     
     international_phone = f"+92{phone[1:]}"
+    # Mock mode verification: accept any code (or master code '123456')
+    if settings.MOCK_OTP_MODE:
+        # treat any code as valid in mock mode
+        user_data = signup_phone_otps[phone]["user_data"]
+        hashed_pwd = get_password_hash(user_data["password"])
+
+        user_in_db = {
+            "phone": user_data["phone"],
+            "email": user_data.get("email"),
+            "name": user_data.get("name"),
+            "hashed_password": hashed_pwd,
+            "phone_verified": True,
+            "plan": "starter",
+            "is_active": True,
+            "created_at": datetime.utcnow()
+        }
+        await db.get_db().users.insert_one(user_in_db)
+
+        access_token = create_access_token(data={"sub": phone})
+        refresh_token = create_refresh_token(data={"sub": phone})
+        del signup_phone_otps[phone]
+
+        return VerifySignupOTPResponse(
+            message="Verified (mock)", access_token=access_token, refresh_token=refresh_token, token_type="bearer"
+        )
+
     try:
         client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
         v_check = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
@@ -186,6 +226,12 @@ async def forgot_password(request: ForgotPasswordRequest):
         return ResetOTPResponse(message="OTP sent if account exists", phone=phone)
     
     international_phone = f"+92{phone[1:]}"
+    # Mock mode: don't call Twilio, store reset request and log OTP
+    if settings.MOCK_OTP_MODE:
+        signup_phone_otps[phone] = {"otp_verified": False, "user_data": {"phone": phone}, "mock_otp": "123456"}
+        logger.warning(f"MOCK MODE: OTP for {phone} is 123456")
+        return ResetOTPResponse(message="OTP sent (mock)", phone=phone)
+
     try:
         client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
         client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verifications.create(
@@ -193,5 +239,53 @@ async def forgot_password(request: ForgotPasswordRequest):
         )
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to send OTP")
-    
+
     return ResetOTPResponse(message="OTP sent", phone=phone)
+
+
+@router.post("/verify-reset-otp", response_model=ResetOTPResponse)
+async def verify_reset_otp(request: VerifyResetOTPRequest):
+    phone = request.phone
+    if phone not in signup_phone_otps:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request OTP first")
+
+    # Mock mode: accept any code (or '123456')
+    if settings.MOCK_OTP_MODE:
+        signup_phone_otps[phone]["otp_verified"] = True
+        return ResetOTPResponse(message="OTP verified (mock)", phone=phone)
+
+    international_phone = f"+92{phone[1:]}"
+    try:
+        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        v_check = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
+            to=international_phone, code=request.code
+        )
+        if v_check.status == "approved":
+            signup_phone_otps[phone]["otp_verified"] = True
+            return ResetOTPResponse(message="OTP verified", phone=phone)
+        else:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to verify OTP")
+
+
+@router.post("/reset-password", response_model=ResetOTPResponse)
+async def reset_password(request: ResetPasswordRequest):
+    phone = request.phone
+    code = request.code
+    new_password = request.new_password
+
+    if phone not in signup_phone_otps or not signup_phone_otps[phone].get("otp_verified"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not verified")
+
+    # perform password reset
+    user = await db.get_db().users.find_one({"phone": phone})
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    hashed = get_password_hash(new_password)
+    await db.get_db().users.update_one({"phone": phone}, {"$set": {"hashed_password": hashed}})
+    # clear OTP state
+    del signup_phone_otps[phone]
+
+    return ResetOTPResponse(message="Password reset successful", phone=phone)

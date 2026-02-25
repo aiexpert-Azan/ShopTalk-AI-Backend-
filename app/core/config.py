@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: Optional[str] = None
     TWILIO_WHATSAPP_NUMBER: Optional[str] = None
     TWILIO_VERIFY_SERVICE_SID: Optional[str] = None
+    # Mock OTP mode for local testing without Twilio
+    MOCK_OTP_MODE: bool = True
 
     # Email Service (SendGrid)
     SENDGRID_API_KEY: Optional[str] = None
