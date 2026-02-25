@@ -1,4 +1,5 @@
 from typing import List, Optional
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -21,13 +22,12 @@ class Settings(BaseSettings):
     AZURE_OPENAI_DEPLOYMENT_NAME: str = "gpt-4"
     AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
 
-    # Twilio (WhatsApp, SMS, Verify)
-    TWILIO_ACCOUNT_SID: Optional[str] = None
-    TWILIO_AUTH_TOKEN: Optional[str] = None
-    TWILIO_WHATSAPP_NUMBER: Optional[str] = None
-    TWILIO_VERIFY_SERVICE_SID: Optional[str] = None
-    # Mock OTP mode for local testing without Twilio
+    # Mock OTP mode for local testing (legacy)
     MOCK_OTP_MODE: bool = True
+    # Firebase service account key path (optional) — prefer environment variable in production
+    # Set `FIREBASE_SERVICE_ACCOUNT_PATH` in the environment to the full path to the JSON key.
+    # Leave as None in development if you want the app to attempt repo-root resolution at runtime.
+    FIREBASE_SERVICE_ACCOUNT_PATH: Optional[str] = None
 
     # Email Service (SendGrid)
     SENDGRID_API_KEY: Optional[str] = None

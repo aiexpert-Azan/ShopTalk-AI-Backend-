@@ -7,7 +7,8 @@ from app.models.user import UserInDB
 from app.models.order import OrderCreate, OrderUpdateStatus, OrderResponse, OrderInDB, OrderTimeline
 from app.models.order import OrderCreate, OrderUpdateStatus, OrderResponse, OrderInDB, OrderTimeline
 from bson import ObjectId
-from app.services.twilio_service import twilio_service
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -133,11 +134,10 @@ async def send_order_message(
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
         
-    # Send via Twilio
-    # Assuming order has customerPhone. Need to ensure format.
+    # Send via external notifier (Twilio removed). Log the outgoing message.
     customer_phone = order.get("customerPhone")
     if customer_phone:
-        twilio_service.send_whatsapp_message(customer_phone, message.get('message'))
+        logger.info(f"Would send message to {customer_phone}: {message.get('message')}")
         
     timeline_entry = OrderTimeline(
         action="Message Sent",

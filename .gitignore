@@ -27,6 +27,8 @@ env/
 **/*_secret.py
 **/*-secret.*
 **/config_secret.py
+serviceAccountKey.json
+serviceAccountKey*.json
 
 # IDEs
 .vscode/

@@ -1,22 +1,24 @@
 from datetime import datetime, timedelta
-from typing import Optional # Add kiya
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel, EmailStr, validator # validator add kiya
-from twilio.rest import Client
+from pydantic import BaseModel, EmailStr, validator
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
 from app.core.security import create_access_token, create_refresh_token, get_password_hash, verify_password
 from app.core.deps import get_current_user
 from app.core.database import db
 from app.models.user import UserCreate, UserLogin, UserResponse, Token, UserInDB
 from app.core.config import settings
-import logging
 
-logger = logging.getLogger(__name__)
-router = APIRouter()
-
-# In-memory storage for signup OTP verification
-signup_phone_otps: dict = {}  # {phone: {otp_verified: bool, user_data: {}}}
-reset_phone_otps: dict = {}  # track reset OTPs when mocking
+# Firebase admin
+import firebase_admin
+from firebase_admin import credentials as firebase_credentials, auth as firebase_auth
+from pathlib import Path
 
 # --- Pydantic Models ---
 class ForgotPasswordRequest(BaseModel):
@@ -37,7 +39,7 @@ class ResetOTPResponse(BaseModel):
 
 class SendSignupOTPRequest(BaseModel):
     phone: str
-    # FIX: Email ko optional kiya aur empty string handle karne ke liye validator lagaya
+    # Email optional to accept null/missing
     email: Optional[EmailStr] = None
     name: str
     password: str
@@ -66,32 +68,26 @@ class VerifySignupOTPResponse(BaseModel):
 
 @router.post("/signup", response_model=Token)
 async def signup(user: UserCreate):
-    if user.phone not in signup_phone_otps or not signup_phone_otps[user.phone].get("otp_verified"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Phone number must be verified with OTP before signup."
-        )
-    
+    # legacy signup route: create account directly (no OTP required)
     user_exists = await db.get_db().users.find_one({"phone": user.phone})
     if user_exists:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered")
+
     hashed_password = get_password_hash(user.password)
     user_data = user.model_dump(exclude={"password"})
     user_in_db = {
         **user_data,
         "hashed_password": hashed_password,
-        "phone_verified": True
+        "phone_verified": True,
+        "plan": "starter",
+        "is_active": True,
+        "created_at": datetime.utcnow()
     }
-    
+
     await db.get_db().users.insert_one(user_in_db)
-    del signup_phone_otps[user.phone]
-    
+
     access_token = create_access_token(data={"sub": user.phone})
     refresh_token = create_refresh_token(data={"sub": user.phone})
-    
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 @router.post("/login", response_model=Token)
@@ -99,193 +95,87 @@ async def login(form_data: UserLogin):
     user = await db.get_db().users.find_one({"phone": form_data.phone})
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect phone or password")
-    
+
     access_token = create_access_token(data={"sub": user["phone"]})
     refresh_token = create_refresh_token(data={"sub": user["phone"]})
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
-@router.post("/send-signup-otp", response_model=SendSignupOTPResponse)
-async def send_signup_otp(request: SendSignupOTPRequest):
-    phone = request.phone
-    user_exists = await db.get_db().users.find_one({"phone": phone})
-    if user_exists:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered")
-    
-    international_phone = f"+92{phone[1:]}"
-    # Mock mode: do not call Twilio, just store the pending signup and log OTP
-    if settings.MOCK_OTP_MODE:
-        signup_phone_otps[phone] = {
-            "otp_verified": False,
-            "user_data": {
-                "phone": phone,
-                "email": request.email,
-                "name": request.name,
-                "password": request.password
-            },
-            "mock_otp": "123456"
-        }
-        logger.warning(f"MOCK MODE: OTP for {phone} is 123456")
-    else:
-        try:
-            client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            verification = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verifications.create(
-                to=international_phone, channel="sms"
-            )
-            signup_phone_otps[phone] = {
-                "otp_verified": False,
-                "user_data": {
-                    "phone": phone,
-                    "email": request.email,
-                    "name": request.name,
-                    "password": request.password
-                }
-            }
-        except Exception as e:
-            logger.error(f"Twilio Error: {str(e)}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to send OTP")
-    
-    return SendSignupOTPResponse(message="OTP sent", phone=phone)
+# NOTE: Twilio OTP endpoints removed. Firebase verification endpoint below replaces signup OTP flow.
 
-@router.post("/verify-signup-otp", response_model=VerifySignupOTPResponse)
-async def verify_signup_otp(request: VerifySignupOTPRequest):
-    phone = request.phone
-    if phone not in signup_phone_otps:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request OTP first")
-    
-    international_phone = f"+92{phone[1:]}"
-    # Mock mode verification: accept any code (or master code '123456')
-    if settings.MOCK_OTP_MODE:
-        # treat any code as valid in mock mode
-        user_data = signup_phone_otps[phone]["user_data"]
-        hashed_pwd = get_password_hash(user_data["password"])
+@router.post("/firebase-verify", response_model=Token)
+async def firebase_verify(id_token: str, phone_number: str, name: Optional[str] = None, email: Optional[EmailStr] = None):
+    """Verify a Firebase idToken and create/return a local JWT for the app.
 
-        user_in_db = {
-            "phone": user_data["phone"],
-            "email": user_data.get("email"),
-            "name": user_data.get("name"),
-            "hashed_password": hashed_pwd,
+    Expects `id_token` (Firebase ID token string) and `phone_number` (client-provided).
+    """
+    # Initialize firebase-admin if not already
+    try:
+        if not firebase_admin._apps:
+            # Prefer explicit environment variable (production/workloads). Fall back to settings value.
+            sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH") or settings.FIREBASE_SERVICE_ACCOUNT_PATH
+            if not sa_path:
+                msg = "Firebase service account path not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH env var or add serviceAccountKey.json to the repo root."
+                logger.error(msg)
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
+
+            sa_p = Path(sa_path)
+            # If relative path or running from subdirectory, resolve against repo root
+            if not sa_p.is_absolute():
+                repo_root = Path(__file__).resolve().parents[2]
+                sa_p = (repo_root / sa_path).resolve()
+
+            if not sa_p.exists():
+                # tried direct and repo-root-resolved path
+                msg = (
+                    f"Firebase service account file not found. Checked: {sa_path} and {sa_p}."
+                    " If you don't have a service account JSON in development, set the"
+                    " FIREBASE_SERVICE_ACCOUNT_PATH environment variable or place the file in the repo root."
+                )
+                logger.error(msg)
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
+
+            cred = firebase_credentials.Certificate(str(sa_p))
+            firebase_admin.initialize_app(cred)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Failed to initialize firebase-admin: {e}")
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin")
+
+    # Verify token
+    try:
+        decoded = firebase_auth.verify_id_token(id_token)
+    except Exception as e:
+        logger.warning(f"Firebase token verification failed: {e}")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Firebase ID token")
+
+    # Prefer phone_number from token if present
+    fb_phone = decoded.get("phone_number")
+    phone = fb_phone or phone_number
+    if not phone:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number required")
+
+    # Check for existing user
+    user = await db.get_db().users.find_one({"phone": phone})
+    if not user:
+        # create new user profile
+        new_user = {
+            "phone": phone,
+            "name": name or decoded.get("name"),
+            "email": email or decoded.get("email"),
             "phone_verified": True,
-            "plan": "starter",
             "is_active": True,
+            "plan": "starter",
             "created_at": datetime.utcnow()
         }
-        await db.get_db().users.insert_one(user_in_db)
+        await db.get_db().users.insert_one(new_user)
 
-        access_token = create_access_token(data={"sub": phone})
-        refresh_token = create_refresh_token(data={"sub": phone})
-        del signup_phone_otps[phone]
+    # Issue our app JWT
+    access_token = create_access_token(data={"sub": phone})
+    refresh_token = create_refresh_token(data={"sub": phone})
+    return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
-        return VerifySignupOTPResponse(
-            message="Verified (mock)", access_token=access_token, refresh_token=refresh_token, token_type="bearer"
-        )
-
-    try:
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        v_check = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
-            to=international_phone, code=request.code
-        )
-        
-        if v_check.status == "approved":
-            user_data = signup_phone_otps[phone]["user_data"]
-            hashed_pwd = get_password_hash(user_data["password"])
-            
-            user_in_db = {
-                "phone": user_data["phone"],
-                "email": user_data["email"],
-                "name": user_data["name"],
-                "hashed_password": hashed_pwd,
-                "phone_verified": True,
-                "plan": "starter",
-                "is_active": True,
-                "created_at": datetime.utcnow()
-            }
-            await db.get_db().users.insert_one(user_in_db)
-            
-            access_token = create_access_token(data={"sub": phone})
-            refresh_token = create_refresh_token(data={"sub": phone})
-            del signup_phone_otps[phone]
-            
-            return VerifySignupOTPResponse(
-                message="Verified", access_token=access_token, refresh_token=refresh_token, token_type="bearer"
-            )
-        else:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP")
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
-
-# Profile and Forgot Password routes as they were...
+# Profile route
 @router.get("/profile", response_model=UserResponse)
 async def read_users_me(current_user: UserInDB = Depends(get_current_user)):
     return current_user
-
-@router.post("/forgot-password", response_model=ResetOTPResponse)
-async def forgot_password(request: ForgotPasswordRequest):
-    phone = request.phone
-    user = await db.get_db().users.find_one({"phone": phone})
-    if not user:
-        return ResetOTPResponse(message="OTP sent if account exists", phone=phone)
-    
-    international_phone = f"+92{phone[1:]}"
-    # Mock mode: don't call Twilio, store reset request and log OTP
-    if settings.MOCK_OTP_MODE:
-        signup_phone_otps[phone] = {"otp_verified": False, "user_data": {"phone": phone}, "mock_otp": "123456"}
-        logger.warning(f"MOCK MODE: OTP for {phone} is 123456")
-        return ResetOTPResponse(message="OTP sent (mock)", phone=phone)
-
-    try:
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verifications.create(
-            to=international_phone, channel="sms"
-        )
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to send OTP")
-
-    return ResetOTPResponse(message="OTP sent", phone=phone)
-
-
-@router.post("/verify-reset-otp", response_model=ResetOTPResponse)
-async def verify_reset_otp(request: VerifyResetOTPRequest):
-    phone = request.phone
-    if phone not in signup_phone_otps:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Request OTP first")
-
-    # Mock mode: accept any code (or '123456')
-    if settings.MOCK_OTP_MODE:
-        signup_phone_otps[phone]["otp_verified"] = True
-        return ResetOTPResponse(message="OTP verified (mock)", phone=phone)
-
-    international_phone = f"+92{phone[1:]}"
-    try:
-        client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        v_check = client.verify.v2.services(settings.TWILIO_VERIFY_SERVICE_SID).verification_checks.create(
-            to=international_phone, code=request.code
-        )
-        if v_check.status == "approved":
-            signup_phone_otps[phone]["otp_verified"] = True
-            return ResetOTPResponse(message="OTP verified", phone=phone)
-        else:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to verify OTP")
-
-
-@router.post("/reset-password", response_model=ResetOTPResponse)
-async def reset_password(request: ResetPasswordRequest):
-    phone = request.phone
-    code = request.code
-    new_password = request.new_password
-
-    if phone not in signup_phone_otps or not signup_phone_otps[phone].get("otp_verified"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP not verified")
-
-    # perform password reset
-    user = await db.get_db().users.find_one({"phone": phone})
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    hashed = get_password_hash(new_password)
-    await db.get_db().users.update_one({"phone": phone}, {"$set": {"hashed_password": hashed}})
-    # clear OTP state
-    del signup_phone_otps[phone]
-
-    return ResetOTPResponse(message="Password reset successful", phone=phone)

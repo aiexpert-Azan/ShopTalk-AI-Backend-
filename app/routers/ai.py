@@ -161,8 +161,8 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
         upsert=True
     )
     
-    # 6. Twilio se reply bhejo
-    from app.services.twilio_service import twilio_service
-    twilio_service.send_whatsapp_message(sender, response_text)
+    # 6. Send reply — Twilio removed. If an external notifier is configured,
+    # it can be plugged in here. For now just log the outgoing message.
+    logger.info(f"Outgoing reply to {sender}: {response_text}")
     
     return {"status": "ok"}

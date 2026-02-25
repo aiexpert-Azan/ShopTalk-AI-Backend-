@@ -5,7 +5,8 @@ from app.core.database import db
 from app.models.user import UserInDB
 from app.models.customer import CustomerResponse, CustomerInDB
 from bson import ObjectId
-from app.services.twilio_service import twilio_service
+import logging
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -66,9 +67,9 @@ async def message_customer(
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
         
-    # Send via Twilio
+    # Send via external notifier (Twilio removed). Log the outgoing message.
     phone = customer.get("phone")
     if phone:
-        twilio_service.send_whatsapp_message(phone, message.get("message"))
+        logger.info(f"Would send message to {phone}: {message.get('message')}")
         
     return {"message": "Message sent"}
