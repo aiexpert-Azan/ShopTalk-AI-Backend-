@@ -7,7 +7,7 @@ from app.routers import auth, shop, products, orders, customers, ai, insights, b
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup - Database connection happens lazily on first use
+    # Startup
     print("[INFO] Application starting up...")
     yield
     # Shutdown
@@ -21,18 +21,25 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     debug=settings.DEBUG,
-    lifespan=lifespan
+    lifespan=lifespan,
+    # Ye line redirects ke CORS errors ko khatam karegi
+    redirect_slashes=False 
 )
 
-# CORS Middleware
+# CORS Middleware - Updated for Production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for testing; restrict in production
-    allow_credentials=False,
+    # Specific origin dena behtar he lekin credentials ke liye "*" allow nahi hota agar allow_credentials=True ho
+    allow_origins=[
+        "https://v0-shopkeeper-ai-setup.vercel.app",
+        "http://localhost:3000"
+    ],
+    allow_credentials=True,  # Isay True hona chahiye taake headers (tokens) pass ho sakein
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Routers
 app.include_router(products.router, prefix="/api/products", tags=["Products"])
 app.include_router(orders.router, prefix="/api/orders", tags=["Orders"])
 app.include_router(customers.router, prefix="/api/customers", tags=["Customers"])
