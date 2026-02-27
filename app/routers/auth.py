@@ -120,13 +120,14 @@ async def firebase_verify(request: VerifyTokenRequest):
     try:
         if not firebase_admin._apps:
             # Preferred: initialize from environment variables (suitable for Render)
+            # Read env vars (Render will provide the private key as a single-line string)
             project_id = os.getenv("FIREBASE_PROJECT_ID")
             client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
-            private_key = os.getenv("FIREBASE_PRIVATE_KEY")
-
-            if private_key:
-                # Convert escaped newlines into real newlines
-                private_key = private_key.replace('\\n', '\n')
+            # Robust key parsing: handle escaped newlines from Render
+            private_key_raw = os.getenv("FIREBASE_PRIVATE_KEY")
+            private_key = None
+            if private_key_raw is not None:
+                private_key = private_key_raw.replace('\\n', '\n')
 
             if project_id and client_email and private_key:
                 cred_dict = {
@@ -137,10 +138,18 @@ async def firebase_verify(request: VerifyTokenRequest):
                 }
                 try:
                     cred = firebase_credentials.Certificate(cred_dict)
+                except Exception as e:
+                    logger.exception("Failed to create credential object from env dict: %s", e)
+                    print(repr(e))
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to create Firebase credential from environment variables")
+
+                # Initialize app and capture initialization errors explicitly (print repr for Render logs)
+                try:
                     firebase_admin.initialize_app(cred)
                     logger.info("Initialized firebase-admin from environment credentials")
                 except Exception as e:
-                    logger.exception("Failed to initialize firebase-admin from environment credentials: %s", e)
+                    logger.error("Failed to initialize firebase-admin from environment credentials: %r", e)
+                    print(repr(e))
                     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin from environment credentials")
             else:
                 # Fallback: try a JSON file path if provided
