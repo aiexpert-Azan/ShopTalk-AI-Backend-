@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, validator
 import logging
 import os
+import json
 import random
 
 logger = logging.getLogger(__name__)
@@ -118,26 +119,54 @@ async def firebase_verify(request: VerifyTokenRequest):
     # Initialize Firebase Admin if not already done
     try:
         if not firebase_admin._apps:
-            sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH") or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_PATH', None)
-            if not sa_path:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Firebase service account path not configured. Set FIREBASE_SERVICE_ACCOUNT_PATH env var."
-                )
+            # Preferred: initialize from environment variables (suitable for Render)
+            project_id = os.getenv("FIREBASE_PROJECT_ID")
+            client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+            private_key = os.getenv("FIREBASE_PRIVATE_KEY")
 
-            sa_p = Path(sa_path)
-            if not sa_p.is_absolute():
-                repo_root = Path(__file__).resolve().parents[2]
-                sa_p = (repo_root / sa_path).resolve()
+            if private_key:
+                # Convert escaped newlines into real newlines
+                private_key = private_key.replace('\\n', '\n')
 
-            if not sa_p.exists():
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail=f"Firebase service account file not found: {sa_p}"
-                )
+            if project_id and client_email and private_key:
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": project_id,
+                    "private_key": private_key,
+                    "client_email": client_email,
+                }
+                try:
+                    cred = firebase_credentials.Certificate(cred_dict)
+                    firebase_admin.initialize_app(cred)
+                    logger.info("Initialized firebase-admin from environment credentials")
+                except Exception as e:
+                    logger.exception("Failed to initialize firebase-admin from environment credentials: %s", e)
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin from environment credentials")
+            else:
+                # Fallback: try a JSON file path if provided
+                sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH") or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_PATH', None)
+                if not sa_path:
+                    msg = "Firebase credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY, or provide FIREBASE_SERVICE_ACCOUNT_PATH."
+                    logger.error(msg)
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
 
-            cred = firebase_credentials.Certificate(str(sa_p))
-            firebase_admin.initialize_app(cred)
+                sa_p = Path(sa_path)
+                if not sa_p.is_absolute():
+                    repo_root = Path(__file__).resolve().parents[2]
+                    sa_p = (repo_root / sa_path).resolve()
+
+                if not sa_p.exists():
+                    msg = f"Firebase service account file not found: {sa_p}"
+                    logger.error(msg)
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
+
+                try:
+                    cred = firebase_credentials.Certificate(str(sa_p))
+                    firebase_admin.initialize_app(cred)
+                    logger.info("Initialized firebase-admin from service account file: %s", sa_p)
+                except Exception as e:
+                    logger.exception("Failed to initialize firebase-admin from file: %s", e)
+                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin from file")
     except HTTPException:
         raise
     except Exception as e:
