@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, validator
+from pydantic import BaseModel, EmailStr, validator, Field
 import logging
 import os
 import json
@@ -26,6 +26,7 @@ reset_codes: dict = {}
 # --- Pydantic Models ---
 
 class VerifyTokenRequest(BaseModel):
+    # Frontend snake_case bhej raha he, isliye yahan id_token hi use kiya he
     id_token: str
     phone_number: str
     name: Optional[str] = None
@@ -53,31 +54,53 @@ class ResetOTPResponse(BaseModel):
     message: str
     phone: str
 
-class SendSignupOTPRequest(BaseModel):
-    phone: str
-    email: Optional[EmailStr] = None
-    name: str
-    password: str
+# --- FIREBASE INITIALIZATION HELPER ---
 
-    @validator('email', pre=True)
-    def allow_empty_email(cls, v):
-        if v == "" or v is None:
-            return None
-        return v
+def initialize_firebase_admin():
+    """Robustly initialize Firebase Admin using Environment Variables or File."""
+    if not firebase_admin._apps:
+        try:
+            # 1. Try Environment Variables (Best for Render)
+            project_id = os.getenv("FIREBASE_PROJECT_ID")
+            client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
+            private_key_raw = os.getenv("FIREBASE_PRIVATE_KEY")
 
-class SendSignupOTPResponse(BaseModel):
-    message: str
-    phone: str
+            if project_id and client_email and private_key_raw:
+                # Handle escaped newlines properly
+                private_key = private_key_raw.replace('\\n', '\n')
+                
+                # Full required dictionary for Firebase Admin
+                cred_dict = {
+                    "type": "service_account",
+                    "project_id": project_id,
+                    "private_key": private_key,
+                    "client_email": client_email,
+                    # Ye missing fields hain jo 503 error de rahi thi
+                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                }
+                
+                cred = firebase_credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+                logger.info("Firebase Admin initialized successfully from Env Vars")
+                return True
 
-class VerifySignupOTPRequest(BaseModel):
-    phone: str
-    code: str
+            # 2. Fallback to Service Account File
+            sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
+            if sa_path and Path(sa_path).exists():
+                cred = firebase_credentials.Certificate(sa_path)
+                firebase_admin.initialize_app(cred)
+                logger.info(f"Firebase Admin initialized from file: {sa_path}")
+                return True
+                
+            logger.error("Firebase credentials missing in Env Vars and File")
+            return False
 
-class VerifySignupOTPResponse(BaseModel):
-    message: str
-    access_token: str
-    refresh_token: str
-    token_type: str
+        except Exception as e:
+            logger.error(f"Critical Firebase Init Failure: {repr(e)}")
+            return False
+    return True
 
 # --- SIGNUP ---
 @router.post("/signup", response_model=Token)
@@ -116,100 +139,36 @@ async def login(form_data: UserLogin):
 # --- FIREBASE VERIFY ---
 @router.post("/firebase-verify", response_model=Token)
 async def firebase_verify(request: VerifyTokenRequest):
-    # Initialize Firebase Admin if not already done
-    try:
-        if not firebase_admin._apps:
-            # Preferred: initialize from environment variables (suitable for Render)
-            # Read env vars (Render will provide the private key as a single-line string)
-            project_id = os.getenv("FIREBASE_PROJECT_ID")
-            client_email = os.getenv("FIREBASE_CLIENT_EMAIL")
-            # Robust key parsing: handle escaped newlines from Render
-            private_key_raw = os.getenv("FIREBASE_PRIVATE_KEY")
-            private_key = None
-            if private_key_raw is not None:
-                private_key = private_key_raw.replace('\\n', '\n')
-
-            if project_id and client_email and private_key:
-                cred_dict = {
-                    "type": "service_account",
-                    "project_id": project_id,
-                    "private_key": private_key,
-                    "client_email": client_email,
-                }
-                try:
-                    cred = firebase_credentials.Certificate(cred_dict)
-                except Exception as e:
-                    logger.exception("Failed to create credential object from env dict: %s", e)
-                    print(repr(e))
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to create Firebase credential from environment variables")
-
-                # Initialize app and capture initialization errors explicitly (print repr for Render logs)
-                try:
-                    firebase_admin.initialize_app(cred)
-                    logger.info("Initialized firebase-admin from environment credentials")
-                except Exception as e:
-                    logger.error("Failed to initialize firebase-admin from environment credentials: %r", e)
-                    print(repr(e))
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin from environment credentials")
-            else:
-                # Fallback: try a JSON file path if provided
-                sa_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH") or getattr(settings, 'FIREBASE_SERVICE_ACCOUNT_PATH', None)
-                if not sa_path:
-                    msg = "Firebase credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY, or provide FIREBASE_SERVICE_ACCOUNT_PATH."
-                    logger.error(msg)
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
-
-                sa_p = Path(sa_path)
-                if not sa_p.is_absolute():
-                    repo_root = Path(__file__).resolve().parents[2]
-                    sa_p = (repo_root / sa_path).resolve()
-
-                if not sa_p.exists():
-                    msg = f"Firebase service account file not found: {sa_p}"
-                    logger.error(msg)
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=msg)
-
-                try:
-                    cred = firebase_credentials.Certificate(str(sa_p))
-                    firebase_admin.initialize_app(cred)
-                    logger.info("Initialized firebase-admin from service account file: %s", sa_p)
-                except Exception as e:
-                    logger.exception("Failed to initialize firebase-admin from file: %s", e)
-                    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Failed to initialize Firebase admin from file")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Failed to initialize firebase-admin: {e}")
+    # Initialize app if needed
+    if not initialize_firebase_admin():
         raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Failed to initialize Firebase admin"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
+            detail="Firebase Service Unavailable (Config Error)"
         )
 
-    # Verify Firebase ID token
+    # Verify Token
     try:
         decoded = firebase_auth.verify_id_token(request.id_token)
     except Exception as e:
-        logger.warning(f"Firebase token verification failed: {e}")
+        logger.warning(f"Token verification failed: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid Firebase ID token"
         )
 
-    # Get phone number
+    # Phone number logic
     fb_phone = decoded.get("phone_number")
     phone = fb_phone or request.phone_number
+    
     if not phone:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Phone number required"
-        )
+        raise HTTPException(status_code=400, detail="Phone number required")
 
-    # Find or create user
+    # DB User check/create
     user = await db.get_db().users.find_one({"phone": phone})
     if not user:
         new_user = {
             "phone": phone,
-            "name": request.name or decoded.get("name"),
+            "name": request.name or decoded.get("name") or "User",
             "email": request.email or decoded.get("email"),
             "phone_verified": True,
             "is_active": True,
@@ -217,15 +176,14 @@ async def firebase_verify(request: VerifyTokenRequest):
             "created_at": datetime.utcnow()
         }
         await db.get_db().users.insert_one(new_user)
-        logger.info(f"New user created via Firebase: {phone}")
 
-    # Issue app JWT tokens
+    # Issue Tokens
     access_token = create_access_token(data={"sub": phone})
     refresh_token = create_refresh_token(data={"sub": phone})
 
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+        "access_token": access_token, 
+        "refresh_token": refresh_token, 
         "token_type": "bearer"
     }
 
@@ -233,77 +191,43 @@ async def firebase_verify(request: VerifyTokenRequest):
 @router.post("/forgot-password", response_model=ResetOTPResponse)
 async def forgot_password(request: ForgotPasswordRequest):
     phone = request.phone
-
     user = await db.get_db().users.find_one({"phone": phone})
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this phone number."
-        )
+        raise HTTPException(status_code=404, detail="No account found with this phone number.")
 
     code = str(random.randint(100000, 999999))
     expiry = datetime.utcnow() + timedelta(minutes=10)
     reset_codes[phone] = {"code": code, "expiry": expiry}
-
-    logger.info(f"[MOCK] Password reset OTP for {phone}: {code}")
-
-    return ResetOTPResponse(
-        message="OTP sent. Use 123456 for testing.",
-        phone=phone
-    )
+    
+    logger.info(f"Password reset OTP for {phone}: {code}")
+    return ResetOTPResponse(message="OTP sent. Use 123456 for testing.", phone=phone)
 
 # --- VERIFY RESET OTP ---
-@router.post("/verify-reset-otp", response_model=dict)
+@router.post("/verify-reset-otp")
 async def verify_reset_otp(request: VerifyResetOTPRequest):
-    phone = request.phone
-
-    user = await db.get_db().users.find_one({"phone": phone})
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    stored = reset_codes.get(phone)
-    if not stored:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No OTP found. Request a new one.")
-
-    if datetime.utcnow() > stored["expiry"]:
-        del reset_codes[phone]
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP expired. Request a new one.")
-
+    stored = reset_codes.get(request.phone)
+    if not stored or datetime.utcnow() > stored["expiry"]:
+        raise HTTPException(status_code=400, detail="OTP expired or not found")
+    
     if request.code != "123456" and request.code != stored["code"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP code.")
-
-    return {"message": "OTP verified successfully", "phone": phone}
+        raise HTTPException(status_code=400, detail="Invalid OTP code")
+        
+    return {"message": "OTP verified successfully", "phone": request.phone}
 
 # --- RESET PASSWORD ---
-@router.post("/reset-password", response_model=dict)
+@router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
-    phone = request.phone
-
-    stored = reset_codes.get(phone)
-    if not stored:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No reset request found.")
-
-    if datetime.utcnow() > stored["expiry"]:
-        del reset_codes[phone]
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OTP expired.")
-
-    if request.code != "123456" and request.code != stored["code"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP code.")
-
-    user = await db.get_db().users.find_one({"phone": phone})
-    if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    stored = reset_codes.get(request.phone)
+    if not stored or request.code != stored["code"] and request.code != "123456":
+        raise HTTPException(status_code=400, detail="Invalid or expired session")
 
     hashed_password = get_password_hash(request.new_password)
     await db.get_db().users.update_one(
-        {"phone": phone},
+        {"phone": request.phone},
         {"$set": {"hashed_password": hashed_password}}
     )
-
-    del reset_codes[phone]
-    logger.info(f"Password reset successful for {phone}")
-
-    return {"message": "Password reset successfully", "phone": phone}
+    if request.phone in reset_codes: del reset_codes[request.phone]
+    return {"message": "Password reset successfully"}
 
 # --- PROFILE ---
 @router.get("/profile", response_model=UserResponse)
