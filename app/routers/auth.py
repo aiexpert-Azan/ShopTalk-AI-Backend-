@@ -69,18 +69,23 @@ def initialize_firebase_admin():
                 # Handle escaped newlines properly
                 private_key = private_key_raw.replace('\\n', '\n')
                 
+                # Fetch optional fields from env with Google defaults
+                token_uri = os.getenv("FIREBASE_TOKEN_URI", "https://oauth2.googleapis.com/token")
+                auth_uri = os.getenv("FIREBASE_AUTH_URI", "https://accounts.google.com/o/oauth2/auth")
+                auth_provider_cert_url = os.getenv("FIREBASE_AUTH_PROVIDER_X509_CERT_URL", "https://www.googleapis.com/oauth2/v1/certs")
+                
                 # Full required dictionary for Firebase Admin
                 cred_dict = {
                     "type": "service_account",
                     "project_id": project_id,
                     "private_key": private_key,
                     "client_email": client_email,
-                    # Ye missing fields hain jo 503 error de rahi thi
-                    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                    "token_uri": token_uri,
+                    "auth_uri": auth_uri,
+                    "auth_provider_x509_cert_url": auth_provider_cert_url,
                 }
                 
+                logger.info(f"Attempting Firebase init with project_id={project_id}, client_email={client_email[:20]}...")
                 cred = firebase_credentials.Certificate(cred_dict)
                 firebase_admin.initialize_app(cred)
                 logger.info("Firebase Admin initialized successfully from Env Vars")
@@ -99,6 +104,7 @@ def initialize_firebase_admin():
 
         except Exception as e:
             logger.error(f"Critical Firebase Init Failure: {repr(e)}")
+            print(f"[FIREBASE ERROR] {repr(e)}")  # Print to stdout for Render logs
             return False
     return True
 

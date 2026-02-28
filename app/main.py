@@ -54,6 +54,15 @@ app.include_router(shop.router, prefix="/api/shop", tags=["Shop"])
 async def health_check():
     return {"status": "ok", "app_name": settings.APP_NAME}
 
+@app.get("/debug/routes")
+async def list_routes():
+    """Debug endpoint to list all registered routes."""
+    routes = []
+    for route in app.routes:
+        if hasattr(route, "path"):
+            routes.append({"path": route.path, "methods": list(getattr(route, "methods", []))})
+    return {"routes": routes}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
