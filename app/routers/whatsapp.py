@@ -19,7 +19,7 @@ class WhatsAppCredentials(BaseModel):
     waba_id: str
     phone_number_id: str
     access_token: str
-    shop_id: str
+    shop_id: Optional[str] = None  # Optional ab
 
 
 class WhatsAppCredentialsResponse(BaseModel):
@@ -43,22 +43,44 @@ async def save_whatsapp_credentials(
 ):
     """Save WhatsApp Business API credentials for a shop"""
     try:
-        # Verify shop belongs to user
+        # User ke phone se shop dhundo
         shop = await db.get_db().shops.find_one({
-            "_id": ObjectId(creds.shop_id),
-            "userId": str(current_user.id)
+            "ownerPhone": current_user.phone
         })
-        
+
+        # Agar phone se nahi mila to userId se try karo
         if not shop:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Shop not found or access denied"
-            )
-        
-        # Validate credentials by making a test API call
+            shop = await db.get_db().shops.find_one({
+                "userId": str(current_user.id)
+            })
+
+        # Agar shop_id diya hai to us se bhi try karo
+        if not shop and creds.shop_id:
+            try:
+                shop = await db.get_db().shops.find_one({
+                    "_id": ObjectId(creds.shop_id)
+                })
+            except Exception:
+                pass
+
+        if not shop:
+            # Shop nahi mila to naya create karo
+            new_shop = {
+                "ownerPhone": current_user.phone,
+                "userId": str(current_user.id),
+                "createdAt": datetime.utcnow(),
+                "updatedAt": datetime.utcnow()
+            }
+            result = await db.get_db().shops.insert_one(new_shop)
+            shop = {"_id": result.inserted_id}
+            logger.info(f"New shop created for user {current_user.phone}")
+
+        shop_id = str(shop["_id"])
+
+        # Credentials verify karo
         is_valid = await verify_whatsapp_credentials(creds.access_token, creds.phone_number_id)
-        
-        # Save credentials to shop document
+
+        # Credentials save karo
         update_data = {
             "whatsapp_app_id": creds.app_id,
             "whatsapp_waba_id": creds.waba_id,
@@ -68,19 +90,19 @@ async def save_whatsapp_credentials(
             "whatsapp_connected_at": datetime.utcnow() if is_valid else None,
             "updatedAt": datetime.utcnow()
         }
-        
+
         await db.get_db().shops.update_one(
-            {"_id": ObjectId(creds.shop_id)},
+            {"_id": shop["_id"]},
             {"$set": update_data}
         )
-        
-        logger.info(f"WhatsApp credentials saved for shop {creds.shop_id}, valid={is_valid}")
-        
+
+        logger.info(f"WhatsApp credentials saved for shop {shop_id}, valid={is_valid}")
+
         return WhatsAppCredentialsResponse(
             message="WhatsApp credentials saved successfully" if is_valid else "Credentials saved but verification failed",
-            shop_id=creds.shop_id
+            shop_id=shop_id
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -98,29 +120,37 @@ async def get_whatsapp_status(
 ):
     """Check WhatsApp connection status for a shop"""
     try:
+        # Phone se dhundo pehle
         shop = await db.get_db().shops.find_one({
-            "_id": ObjectId(shop_id),
-            "userId": str(current_user.id)
+            "ownerPhone": current_user.phone
         })
-        
+
         if not shop:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Shop not found or access denied"
+            try:
+                shop = await db.get_db().shops.find_one({
+                    "_id": ObjectId(shop_id)
+                })
+            except Exception:
+                pass
+
+        if not shop:
+            return WhatsAppStatusResponse(
+                connected=False,
+                verified=False,
+                message="Shop not found"
             )
-        
+
         has_credentials = bool(
-            shop.get("whatsapp_access_token") and 
+            shop.get("whatsapp_access_token") and
             shop.get("whatsapp_phone_number_id")
         )
-        
+
         if has_credentials:
-            # Verify credentials are still valid
             is_valid = await verify_whatsapp_credentials(
                 shop.get("whatsapp_access_token"),
                 shop.get("whatsapp_phone_number_id")
             )
-            
+
             return WhatsAppStatusResponse(
                 connected=is_valid,
                 phone_number_id=shop.get("whatsapp_phone_number_id"),
@@ -129,13 +159,13 @@ async def get_whatsapp_status(
                 verified=is_valid,
                 message="WhatsApp Business API connected" if is_valid else "Credentials invalid or expired"
             )
-        
+
         return WhatsAppStatusResponse(
             connected=False,
             verified=False,
             message="WhatsApp not configured for this shop"
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -154,18 +184,25 @@ async def disconnect_whatsapp(
     """Disconnect WhatsApp from a shop"""
     try:
         shop = await db.get_db().shops.find_one({
-            "_id": ObjectId(shop_id),
-            "userId": str(current_user.id)
+            "ownerPhone": current_user.phone
         })
-        
+
+        if not shop:
+            try:
+                shop = await db.get_db().shops.find_one({
+                    "_id": ObjectId(shop_id)
+                })
+            except Exception:
+                pass
+
         if not shop:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Shop not found or access denied"
+                detail="Shop not found"
             )
-        
+
         await db.get_db().shops.update_one(
-            {"_id": ObjectId(shop_id)},
+            {"_id": shop["_id"]},
             {"$unset": {
                 "whatsapp_app_id": "",
                 "whatsapp_waba_id": "",
@@ -175,10 +212,10 @@ async def disconnect_whatsapp(
                 "whatsapp_connected_at": ""
             }}
         )
-        
+
         logger.info(f"WhatsApp disconnected for shop {shop_id}")
         return {"message": "WhatsApp disconnected successfully", "shop_id": shop_id}
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -194,11 +231,11 @@ async def verify_whatsapp_credentials(access_token: str, phone_number_id: str) -
     try:
         url = f"https://graph.facebook.com/v22.0/{phone_number_id}"
         headers = {"Authorization": f"Bearer {access_token}"}
-        
+
         async with httpx.AsyncClient() as client:
             resp = await client.get(url, headers=headers, timeout=10)
             return resp.status_code == 200
-            
+
     except Exception as e:
         logger.warning(f"WhatsApp credential verification failed: {e}")
         return False
