@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
+    # Meta WhatsApp Business API
+    WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_VERIFY_TOKEN: str = ""
+    WHATSAPP_WABA_ID: str = ""
+    META_APP_ID: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

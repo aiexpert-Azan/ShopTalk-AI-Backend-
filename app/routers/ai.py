@@ -1,5 +1,6 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi.responses import PlainTextResponse
 from app.core.deps import get_current_user
 from app.core.database import db
 from app.core.config import settings
@@ -9,6 +10,7 @@ from app.services.ai_service import ai_service
 from datetime import datetime
 from bson import ObjectId
 import logging
+import httpx
 from fastapi import Body
 
 # Dummy client for testing (returns a static response)
@@ -91,30 +93,91 @@ async def get_conversation_history(
         
     return conversation.get("messages", [])
 
+@router.get("/webhook/whatsapp")
+async def whatsapp_webhook_verify(
+    hub_mode: str = Query(None, alias="hub.mode"),
+    hub_verify_token: str = Query(None, alias="hub.verify_token"),
+    hub_challenge: str = Query(None, alias="hub.challenge")
+):
+    """Meta WhatsApp Webhook Verification (GET request)"""
+    logger.info(f"WhatsApp webhook verification: mode={hub_mode}, token={hub_verify_token}")
+    
+    if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
+        logger.info("WhatsApp webhook verified successfully")
+        return PlainTextResponse(content=hub_challenge, status_code=200)
+    
+    logger.warning("WhatsApp webhook verification failed")
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
 @router.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
-    form_data = await request.form()
-    incoming_msg = form_data.get('Body', '').strip()
-    sender = form_data.get('From', '')
+    """Meta WhatsApp Webhook - Receive incoming messages"""
+    try:
+        payload = await request.json()
+    except Exception as e:
+        logger.error(f"Failed to parse webhook payload: {e}")
+        return {"status": "error", "message": "Invalid payload"}
     
-    if not incoming_msg:
-        return {"status": "no message"}
+    logger.info(f"WhatsApp webhook received: {payload}")
     
-    logger.info(f"Received message from {sender}: {incoming_msg}")
-    
-    # 1. Customer phone number extract karo
-    customer_phone = sender.replace("whatsapp:", "")
-    
-    # 2. Database se shop dhundo
-    # Abhi sirf pehli shop use kar rahe hain testing ke liye
-    shop = await db.get_db().shops.find_one({})
-    
-    if shop:
-        shop_name = shop.get("name", "Our Shop")
-        shop_description = shop.get("description", "")
-        products = shop.get("products", [])
+    # Parse Meta webhook payload
+    try:
+        entry = payload.get("entry", [])
+        if not entry:
+            return {"status": "ok"}
         
-        shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
+        changes = entry[0].get("changes", [])
+        if not changes:
+            return {"status": "ok"}
+        
+        value = changes[0].get("value", {})
+        messages = value.get("messages", [])
+        metadata = value.get("metadata", {})
+        phone_number_id = metadata.get("phone_number_id", "")
+        
+        if not messages:
+            # Could be a status update, not a message
+            return {"status": "ok"}
+        
+        message = messages[0]
+        msg_type = message.get("type", "")
+        sender_phone = message.get("from", "")
+        
+        # Extract message text based on type
+        if msg_type == "text":
+            incoming_msg = message.get("text", {}).get("body", "").strip()
+        elif msg_type == "button":
+            incoming_msg = message.get("button", {}).get("text", "").strip()
+        elif msg_type == "interactive":
+            interactive = message.get("interactive", {})
+            if "button_reply" in interactive:
+                incoming_msg = interactive["button_reply"].get("title", "")
+            elif "list_reply" in interactive:
+                incoming_msg = interactive["list_reply"].get("title", "")
+            else:
+                incoming_msg = ""
+        else:
+            incoming_msg = ""
+        
+        if not incoming_msg or not sender_phone:
+            return {"status": "ok"}
+        
+        logger.info(f"Received WhatsApp message from {sender_phone}: {incoming_msg}")
+        
+        # Find shop by phone_number_id
+        shop = await db.get_db().shops.find_one({"whatsapp_phone_number_id": phone_number_id})
+        
+        if not shop:
+            # Fallback: try to find any shop or use default
+            shop = await db.get_db().shops.find_one({})
+            logger.warning(f"No shop found for phone_number_id {phone_number_id}, using fallback")
+        
+        # Build shop context for AI
+        if shop:
+            shop_name = shop.get("name", "Our Shop")
+            shop_description = shop.get("description", "")
+            shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
 {shop_description}
 
 You help customers with:
@@ -125,44 +188,84 @@ You help customers with:
 
 Always be polite, helpful and respond in the same language the customer uses.
 If customer writes in Urdu, respond in Urdu. If in English, respond in English."""
-    else:
-        shop_context = "You are a helpful shop assistant. Help customers with their orders and inquiries."
-    
-    # 3. Conversation history fetch karo
-    conversation = await db.get_db().conversations.find_one({
-        "customerPhone": customer_phone
-    })
-    history = conversation.get("messages", []) if conversation else []
-    
-    # 4. AI response generate karo
-    try:
-        response_text = await ai_service.generate_response(
-            shop_context=shop_context,
-            history=history,
-            user_message=incoming_msg
+            shop_id = str(shop.get("_id", ""))
+        else:
+            shop_context = "You are a helpful shop assistant. Help customers with their orders and inquiries."
+            shop_id = ""
+        
+        # Get conversation history
+        conversation = await db.get_db().conversations.find_one({
+            "customerPhone": sender_phone,
+            "shopId": shop_id
+        }) if shop_id else await db.get_db().conversations.find_one({
+            "customerPhone": sender_phone
+        })
+        history = conversation.get("messages", []) if conversation else []
+        
+        # Generate AI response
+        try:
+            response_text = await ai_service.generate_response(
+                shop_context=shop_context,
+                history=history,
+                user_message=incoming_msg
+            )
+        except Exception as e:
+            logger.error(f"AI error: {e}")
+            response_text = "Sorry, I'm having trouble right now. Please try again later."
+        
+        # Save conversation history
+        new_messages = history + [
+            {"role": "user", "content": incoming_msg},
+            {"role": "assistant", "content": response_text}
+        ]
+        
+        await db.get_db().conversations.update_one(
+            {"customerPhone": sender_phone, "shopId": shop_id} if shop_id else {"customerPhone": sender_phone},
+            {"$set": {
+                "customerPhone": sender_phone,
+                "shopId": shop_id,
+                "messages": new_messages[-20:],
+                "updatedAt": datetime.utcnow()
+            }},
+            upsert=True
         )
+        
+        # Send reply via Meta WhatsApp API
+        access_token = shop.get("whatsapp_access_token") if shop else None
+        if not access_token:
+            access_token = settings.WHATSAPP_ACCESS_TOKEN
+        
+        send_phone_id = shop.get("whatsapp_phone_number_id") if shop else None
+        if not send_phone_id:
+            send_phone_id = phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
+        
+        if access_token and send_phone_id:
+            whatsapp_url = f"https://graph.facebook.com/v22.0/{send_phone_id}/messages"
+            headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
+            message_payload = {
+                "messaging_product": "whatsapp",
+                "to": sender_phone,
+                "type": "text",
+                "text": {"body": response_text}
+            }
+            
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(whatsapp_url, json=message_payload, headers=headers, timeout=30)
+                    if resp.status_code == 200:
+                        logger.info(f"WhatsApp reply sent to {sender_phone}")
+                    else:
+                        logger.error(f"WhatsApp API error: {resp.status_code} - {resp.text}")
+            except Exception as e:
+                logger.error(f"Failed to send WhatsApp reply: {e}")
+        else:
+            logger.warning(f"No WhatsApp credentials, logging reply: {response_text}")
+        
+        return {"status": "ok"}
+        
     except Exception as e:
-        logger.error(f"AI error: {e}")
-        response_text = "Sorry, I'm having trouble right now. Please try again later."
-    
-    # 5. Conversation history save karo
-    new_messages = history + [
-        {"role": "user", "content": incoming_msg},
-        {"role": "assistant", "content": response_text}
-    ]
-    
-    await db.get_db().conversations.update_one(
-        {"customerPhone": customer_phone},
-        {"$set": {
-            "customerPhone": customer_phone,
-            "messages": new_messages[-20:],  # Last 20 messages rakhna
-            "updatedAt": datetime.utcnow()
-        }},
-        upsert=True
-    )
-    
-    # 6. Send reply — Twilio removed. If an external notifier is configured,
-    # it can be plugged in here. For now just log the outgoing message.
-    logger.info(f"Outgoing reply to {sender}: {response_text}")
-    
-    return {"status": "ok"}
+        logger.error(f"WhatsApp webhook error: {e}", exc_info=True)
+        return {"status": "ok"}  # Always return 200 to Meta
