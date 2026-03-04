@@ -36,6 +36,210 @@ class WhatsAppStatusResponse(BaseModel):
     message: str
 
 
+class EmbeddedSignupRequest(BaseModel):
+    code: str
+
+
+class EmbeddedSignupResponse(BaseModel):
+    success: bool
+    shop_id: str
+    waba_id: str
+    phone_number_id: str
+    connected: bool
+    message: str
+
+
+@router.post("/embedded-signup", response_model=EmbeddedSignupResponse)
+async def embedded_signup(
+    request: EmbeddedSignupRequest,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    """
+    Complete Facebook Embedded Signup flow for WhatsApp Business API.
+    Exchanges authorization code for access token, fetches WABA info,
+    saves credentials, and subscribes to webhooks.
+    """
+    try:
+        logger.info(f"Starting embedded signup for user {current_user.phone}")
+
+        # Step 1: Exchange code for access token
+        token_url = "https://graph.facebook.com/v22.0/oauth/access_token"
+        token_params = {
+            "client_id": settings.FACEBOOK_APP_ID,
+            "client_secret": settings.FACEBOOK_APP_SECRET,
+            "code": request.code
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            token_resp = await client.get(token_url, params=token_params)
+
+            if token_resp.status_code != 200:
+                logger.error(f"Token exchange failed: {token_resp.text}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to exchange code for access token: {token_resp.text}"
+                )
+
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+
+            if not access_token:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No access token received from Facebook"
+                )
+
+            logger.info("Successfully exchanged code for access token")
+
+            # Step 2: Get user's businesses
+            headers = {"Authorization": f"Bearer {access_token}"}
+            businesses_resp = await client.get(
+                "https://graph.facebook.com/v22.0/me/businesses",
+                headers=headers
+            )
+
+            if businesses_resp.status_code != 200:
+                logger.error(f"Failed to fetch businesses: {businesses_resp.text}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to fetch businesses from Facebook"
+                )
+
+            businesses_data = businesses_resp.json()
+            businesses = businesses_data.get("data", [])
+
+            if not businesses:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No businesses found for this Facebook account"
+                )
+
+            business_id = businesses[0].get("id")
+            logger.info(f"Found business_id: {business_id}")
+
+            # Step 3: Get WhatsApp Business Accounts
+            waba_resp = await client.get(
+                f"https://graph.facebook.com/v22.0/{business_id}/owned_whatsapp_business_accounts",
+                headers=headers
+            )
+
+            if waba_resp.status_code != 200:
+                logger.error(f"Failed to fetch WABA: {waba_resp.text}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to fetch WhatsApp Business Account"
+                )
+
+            waba_data = waba_resp.json()
+            wabas = waba_data.get("data", [])
+
+            if not wabas:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No WhatsApp Business Account found"
+                )
+
+            waba_id = wabas[0].get("id")
+            logger.info(f"Found waba_id: {waba_id}")
+
+            # Step 4: Get phone numbers
+            phone_resp = await client.get(
+                f"https://graph.facebook.com/v22.0/{waba_id}/phone_numbers",
+                headers=headers
+            )
+
+            if phone_resp.status_code != 200:
+                logger.error(f"Failed to fetch phone numbers: {phone_resp.text}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Failed to fetch phone numbers"
+                )
+
+            phone_data = phone_resp.json()
+            phone_numbers = phone_data.get("data", [])
+
+            if not phone_numbers:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No phone numbers found for this WhatsApp Business Account"
+                )
+
+            phone_number_id = phone_numbers[0].get("id")
+            logger.info(f"Found phone_number_id: {phone_number_id}")
+
+            # Step 5: Find or create shop
+            shop = await db.get_db().shops.find_one({
+                "ownerPhone": current_user.phone
+            })
+
+            if not shop:
+                shop = await db.get_db().shops.find_one({
+                    "userId": str(current_user.id)
+                })
+
+            if not shop:
+                new_shop = {
+                    "ownerPhone": current_user.phone,
+                    "userId": str(current_user.id),
+                    "createdAt": datetime.utcnow(),
+                    "updatedAt": datetime.utcnow()
+                }
+                result = await db.get_db().shops.insert_one(new_shop)
+                shop = {"_id": result.inserted_id}
+                logger.info(f"New shop created for user {current_user.phone}")
+
+            shop_id = str(shop["_id"])
+
+            # Step 6: Save credentials to MongoDB
+            update_data = {
+                "whatsapp_app_id": settings.FACEBOOK_APP_ID,
+                "whatsapp_waba_id": waba_id,
+                "whatsapp_phone_number_id": phone_number_id,
+                "whatsapp_access_token": access_token,
+                "whatsapp_connected": True,
+                "whatsapp_connected_at": datetime.utcnow(),
+                "whatsapp_setup_method": "embedded_signup",
+                "updatedAt": datetime.utcnow()
+            }
+
+            await db.get_db().shops.update_one(
+                {"_id": shop["_id"]},
+                {"$set": update_data}
+            )
+
+            logger.info(f"WhatsApp credentials saved for shop {shop_id}")
+
+            # Step 7: Subscribe app to webhooks
+            subscribe_resp = await client.post(
+                f"https://graph.facebook.com/v22.0/{waba_id}/subscribed_apps",
+                headers=headers
+            )
+
+            if subscribe_resp.status_code != 200:
+                logger.warning(f"Webhook subscription warning: {subscribe_resp.text}")
+                # Don't fail the whole flow, just log warning
+            else:
+                logger.info(f"Successfully subscribed to webhooks for WABA {waba_id}")
+
+        return EmbeddedSignupResponse(
+            success=True,
+            shop_id=shop_id,
+            waba_id=waba_id,
+            phone_number_id=phone_number_id,
+            connected=True,
+            message="WhatsApp Business API connected successfully via Embedded Signup"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Embedded signup error: {repr(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Embedded signup failed: {str(e)}"
+        )
+
+
 @router.post("/save-credentials", response_model=WhatsAppCredentialsResponse)
 async def save_whatsapp_credentials(
     creds: WhatsAppCredentials,

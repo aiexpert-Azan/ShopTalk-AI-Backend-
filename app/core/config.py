@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     WHATSAPP_WABA_ID: str = ""
     META_APP_ID: str = ""
 
+    # Facebook OAuth (for Embedded Signup)
+    FACEBOOK_APP_ID: str = ""
+    FACEBOOK_APP_SECRET: str = ""
+    FACEBOOK_CONFIG_ID: str = ""
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
