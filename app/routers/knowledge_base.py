@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from app.core.database import db
-from app.core.security import get_current_user
-from app.models.shop import Shop
-from app.models.user import User
+from app.core.deps import get_current_user
+from app.models.user import UserInDB
 from typing import List, Optional
 from datetime import datetime
 from bson import ObjectId
@@ -17,7 +16,7 @@ def qa_to_dict(qa):
     return qa
 
 @router.get("/", response_model=List[dict])
-async def get_knowledge_base(current_user: User = Depends(get_current_user)):
+async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user)):
     shop = await db.get_db().shop.find_one({"ownerPhone": current_user.phone})
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
@@ -27,7 +26,7 @@ async def get_knowledge_base(current_user: User = Depends(get_current_user)):
 @router.post("/", response_model=dict)
 async def add_qa_pair(
     body: dict = Body(...),
-    current_user: User = Depends(get_current_user)
+    current_user: UserInDB = Depends(get_current_user)
 ):
     shop = await db.get_db().shop.find_one({"ownerPhone": current_user.phone})
     if not shop:
@@ -48,7 +47,7 @@ async def add_qa_pair(
 async def update_qa_pair(
     qa_id: str,
     body: dict = Body(...),
-    current_user: User = Depends(get_current_user)
+    current_user: UserInDB = Depends(get_current_user)
 ):
     update_fields = {k: v for k, v in body.items() if k in ["question", "answer", "category", "is_active"]}
     result = await db.get_db().knowledge_base.update_one({"_id": ObjectId(qa_id)}, {"$set": update_fields})
@@ -60,7 +59,7 @@ async def update_qa_pair(
 @router.delete("/{qa_id}", response_model=dict)
 async def delete_qa_pair(
     qa_id: str,
-    current_user: User = Depends(get_current_user)
+    current_user: UserInDB = Depends(get_current_user)
 ):
     result = await db.get_db().knowledge_base.delete_one({"_id": ObjectId(qa_id)})
     if result.deleted_count == 0:
