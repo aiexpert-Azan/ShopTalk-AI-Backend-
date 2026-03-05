@@ -17,7 +17,11 @@ def qa_to_dict(qa):
 
 @router.get("/", response_model=List[dict])
 async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user)):
-    shop = await db.get_db().shop.find_one({"ownerPhone": current_user.phone})
+    shop = await db.get_db().shops.find_one({"ownerPhone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"owner_phone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
     qa_pairs = await db.get_db().knowledge_base.find({"shopId": str(shop["_id"])}).to_list(100)
@@ -28,7 +32,11 @@ async def add_qa_pair(
     body: dict = Body(...),
     current_user: UserInDB = Depends(get_current_user)
 ):
-    shop = await db.get_db().shop.find_one({"ownerPhone": current_user.phone})
+    shop = await db.get_db().shops.find_one({"ownerPhone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"owner_phone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
     qa_doc = {
@@ -49,6 +57,13 @@ async def update_qa_pair(
     body: dict = Body(...),
     current_user: UserInDB = Depends(get_current_user)
 ):
+    shop = await db.get_db().shops.find_one({"ownerPhone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"owner_phone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
     update_fields = {k: v for k, v in body.items() if k in ["question", "answer", "category", "is_active"]}
     result = await db.get_db().knowledge_base.update_one({"_id": ObjectId(qa_id)}, {"$set": update_fields})
     if result.matched_count == 0:
@@ -61,6 +76,13 @@ async def delete_qa_pair(
     qa_id: str,
     current_user: UserInDB = Depends(get_current_user)
 ):
+    shop = await db.get_db().shops.find_one({"ownerPhone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"owner_phone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
     result = await db.get_db().knowledge_base.delete_one({"_id": ObjectId(qa_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Q&A pair not found")
