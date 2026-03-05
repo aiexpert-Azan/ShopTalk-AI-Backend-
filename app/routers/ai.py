@@ -177,7 +177,35 @@ async def whatsapp_webhook(request: Request):
         if shop:
             shop_name = shop.get("name", "Our Shop")
             shop_description = shop.get("description", "")
-            shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
+            shop_id = str(shop.get("_id", ""))
+            # Fetch knowledge base Q&A pairs for this shop
+            qa_pairs = await db.get_db().knowledge_base.find({
+                "shopId": shop_id,
+                "is_active": True
+            }).to_list(50)
+            knowledge_section = "\n".join([
+                f"Q: {qa['question']}\nA: {qa['answer']}" for qa in qa_pairs
+            ]) if qa_pairs else ""
+            if knowledge_section:
+                shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
+{shop_description}
+
+IMPORTANT - Use these exact answers for these questions:
+{knowledge_section}
+
+If customer asks anything matching above questions, use the provided answer exactly.
+For other questions, use your general knowledge about the shop.
+
+You help customers with:
+- Product inquiries and availability
+- Taking orders
+- Answering questions about the shop
+- Providing pricing information
+
+Always be polite, helpful and respond in the same language the customer uses.
+If customer writes in Urdu, respond in Urdu. If in English, respond in English."""
+            else:
+                shop_context = f"""You are a helpful WhatsApp assistant for {shop_name}.
 {shop_description}
 
 You help customers with:
@@ -188,7 +216,6 @@ You help customers with:
 
 Always be polite, helpful and respond in the same language the customer uses.
 If customer writes in Urdu, respond in Urdu. If in English, respond in English."""
-            shop_id = str(shop.get("_id", ""))
         else:
             shop_context = "You are a helpful shop assistant. Help customers with their orders and inquiries."
             shop_id = ""
