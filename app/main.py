@@ -26,6 +26,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://v0-shopkeeper-ai-setup.vercel.app",
+        "https://v0-admin-panel-for-shop-talk.vercel.app",
         "http://localhost:3000"
     ],
     allow_credentials=True,
