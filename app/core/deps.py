@@ -33,3 +33,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserInDB:
     # Convert ObjectId to string for Pydantic
     user_data["_id"] = str(user_data["_id"])
     return UserInDB(**user_data)
+
+async def get_admin_user(current_user: UserInDB = Depends(get_current_user)):
+    if getattr(current_user, 'role', None) != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
