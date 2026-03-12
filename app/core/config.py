@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     FACEBOOK_APP_SECRET: str = ""
     FACEBOOK_CONFIG_ID: str = ""
 
+    # Admin
+    ADMIN_PHONE_NUMBER: Optional[str] = None
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

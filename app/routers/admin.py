@@ -4,12 +4,13 @@ from app.core.deps import get_admin_user
 from app.models.user import UserInDB
 from bson import ObjectId
 from datetime import datetime
+from app.middleware.adminAuth import isAdmin
 
 router = APIRouter()
 
 # 1. GET /stats - Overall system stats
 @router.get("/stats")
-async def get_stats(admin: UserInDB = Depends(get_admin_user)):
+async def get_stats(admin = Depends(isAdmin)):
     total_users = await db.get_db().users.count_documents({})
     total_shops = await db.get_db().shops.count_documents({})
     active_subscriptions = await db.get_db().shops.count_documents({"plan": {"$ne": "free"}})
@@ -28,7 +29,7 @@ async def get_stats(admin: UserInDB = Depends(get_admin_user)):
 
 # 2. GET /users - Get all users with their shop info
 @router.get("/users")
-async def get_all_users(admin: UserInDB = Depends(get_admin_user)):
+async def get_all_users(admin = Depends(isAdmin)):
     users = await db.get_db().users.find({}).to_list(1000)
     shops = await db.get_db().shops.find({}).to_list(1000)
     shop_map = {str(shop.get("userId")): shop for shop in shops}
@@ -51,7 +52,7 @@ async def get_all_users(admin: UserInDB = Depends(get_admin_user)):
 
 # 3. GET /users/{user_id} - Get single user detail
 @router.get("/users/{user_id}")
-async def get_user_detail(user_id: str, admin: UserInDB = Depends(get_admin_user)):
+async def get_user_detail(user_id: str, admin = Depends(isAdmin)):
     user = await db.get_db().users.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -65,7 +66,7 @@ async def get_user_detail(user_id: str, admin: UserInDB = Depends(get_admin_user
 
 # 4. PUT /users/{user_id}/plan - Update user plan
 @router.put("/users/{user_id}/plan")
-async def update_user_plan(user_id: str, body: dict = Body(...), admin: UserInDB = Depends(get_admin_user)):
+async def update_user_plan(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     plan = body.get("plan")
     if plan not in ["free", "starter", "growth", "business"]:
         raise HTTPException(status_code=400, detail="Invalid plan")
@@ -78,7 +79,7 @@ async def update_user_plan(user_id: str, body: dict = Body(...), admin: UserInDB
 
 # 5. PUT /users/{user_id}/status - Block/unblock user
 @router.put("/users/{user_id}/status")
-async def update_user_status(user_id: str, body: dict = Body(...), admin: UserInDB = Depends(get_admin_user)):
+async def update_user_status(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     is_active = body.get("is_active")
     if is_active not in [True, False]:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -88,7 +89,7 @@ async def update_user_status(user_id: str, body: dict = Body(...), admin: UserIn
 
 # 6. GET /shops - Get all shops with WhatsApp status
 @router.get("/shops")
-async def get_all_shops(admin: UserInDB = Depends(get_admin_user)):
+async def get_all_shops(admin = Depends(isAdmin)):
     shops = await db.get_db().shops.find({}).to_list(1000)
     result = []
     for shop in shops:
@@ -106,7 +107,7 @@ async def get_all_shops(admin: UserInDB = Depends(get_admin_user)):
 
 # 7. GET /conversations - Recent conversations across all shops
 @router.get("/conversations")
-async def get_recent_conversations(admin: UserInDB = Depends(get_admin_user)):
+async def get_recent_conversations(admin = Depends(isAdmin)):
     conversations = await db.get_db().conversations.find({}).sort("updatedAt", -1).limit(50).to_list(50)
     shop_map = {str(shop["_id"]): shop.get("name") for shop in await db.get_db().shops.find({}).to_list(1000)}
     result = []
@@ -122,7 +123,7 @@ async def get_recent_conversations(admin: UserInDB = Depends(get_admin_user)):
 
 # 8. DELETE /users/{user_id} - Delete user and their shop data
 @router.delete("/users/{user_id}")
-async def delete_user(user_id: str, admin: UserInDB = Depends(get_admin_user)):
+async def delete_user(user_id: str, admin = Depends(isAdmin)):
     await db.get_db().users.delete_one({"_id": ObjectId(user_id)})
     await db.get_db().shops.delete_many({"userId": user_id})
     await db.get_db().conversations.delete_many({"shopId": user_id})
