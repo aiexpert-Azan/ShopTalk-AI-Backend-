@@ -1,3 +1,122 @@
+# --- ADMIN PANEL ENDPOINTS ---
+from fastapi.responses import JSONResponse
+import random
+import os
+
+# 1. GET /api/admin/analytics
+@router.get("/analytics")
+async def admin_analytics(admin = Depends(isAdmin)):
+    try:
+        # Mock revenue calculation
+        plans = ["free", "starter", "growth", "business"]
+        plan_prices = {"free": 0, "starter": 49, "growth": 99, "business": 199}
+        shops = await db.get_db().shops.find({}).to_list(1000)
+        revenue_by_plan = {p: 0 for p in plans}
+        for shop in shops:
+            plan = shop.get("plan", "free")
+            revenue_by_plan[plan] += plan_prices.get(plan, 0)
+        total_revenue = sum(revenue_by_plan.values())
+
+        # Messages processed over last 7 days
+        today = datetime.utcnow()
+        messages_time_series = []
+        for i in range(7):
+            day = today.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=i)
+            count = await db.get_db().conversations.count_documents({"updatedAt": {"$gte": day, "$lt": day + timedelta(days=1)}})
+            messages_time_series.append({"date": day.strftime("%Y-%m-%d"), "count": count})
+        messages_time_series.reverse()
+
+        # Revenue by plan breakdown
+        plan_breakdown = {p: await db.get_db().shops.count_documents({"plan": p}) for p in plans}
+
+        return JSONResponse({
+            "total_revenue": total_revenue,
+            "messages_time_series": messages_time_series,
+            "revenue_by_plan": revenue_by_plan,
+            "plan_breakdown": plan_breakdown
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# 2. GET /api/admin/infrastructure
+@router.get("/infrastructure")
+async def admin_infrastructure(admin = Depends(isAdmin)):
+    try:
+        # Mock CPU/RAM usage
+        cpu_usage = round(random.uniform(10, 60), 2)
+        ram_usage = round(random.uniform(20, 80), 2)
+
+        # External service status (mocked)
+        services = {
+            "MongoDB": "Operational",
+            "MetaWhatsAppAPI": "Operational",
+            "OpenAIAPI": "Operational"
+        }
+
+        # Mock logs
+        logs = [
+            {"timestamp": datetime.utcnow().isoformat(), "level": "INFO", "message": "System started."},
+            {"timestamp": datetime.utcnow().isoformat(), "level": "ERROR", "message": "Mock error event."}
+        ]
+
+        return JSONResponse({
+            "cpu_usage": cpu_usage,
+            "ram_usage": ram_usage,
+            "services": services,
+            "logs": logs
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# 3. GET /api/admin/subscriptions
+@router.get("/subscriptions")
+async def admin_subscriptions(admin = Depends(isAdmin)):
+    try:
+        plan_prices = {"free": 0, "starter": 49, "growth": 99, "business": 199}
+        shops = await db.get_db().shops.find({}).to_list(1000)
+        result = []
+        for shop in shops:
+            plan = shop.get("plan", "free")
+            mrr = plan_prices.get(plan, 0)
+            status = "active" if shop.get("is_active", True) else "inactive"
+            result.append({
+                "shop_id": str(shop.get("_id")),
+                "shop_name": shop.get("name"),
+                "owner_phone": shop.get("ownerPhone", shop.get("owner_phone")),
+                "current_plan": plan,
+                "status": status,
+                "mrr": mrr
+            })
+        return JSONResponse({"subscriptions": result})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# 4. GET & PUT /api/admin/settings
+@router.get("/settings")
+async def admin_settings(admin = Depends(isAdmin)):
+    try:
+        settings_doc = await db.get_db().global_settings.find_one({}) if hasattr(db.get_db(), "global_settings") else None
+        if settings_doc:
+            settings_doc.pop("_id", None)
+            return JSONResponse(settings_doc)
+        # Mocked settings
+        return JSONResponse({
+            "openai_model_version": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini"),
+            "system_maintenance_mode": False
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@router.put("/settings")
+async def update_admin_settings(body: dict = Body(...), admin = Depends(isAdmin)):
+    try:
+        if hasattr(db.get_db(), "global_settings"):
+            await db.get_db().global_settings.update_one({}, {"$set": body}, upsert=True)
+            return JSONResponse({"success": True, "updated": body})
+        # Mock update
+        return JSONResponse({"success": True, "updated": body, "mocked": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 from fastapi import APIRouter, Depends, HTTPException, Body
 from app.core.database import db
 from app.core.deps import get_admin_user
