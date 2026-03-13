@@ -1,9 +1,20 @@
-# --- ADMIN PANEL ENDPOINTS ---
+from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
+from datetime import datetime, timedelta
 import random
 import os
+from bson import ObjectId
 
-# 1. GET /api/admin/analytics
+from app.core.database import db
+from app.middleware.adminAuth import isAdmin
+
+router = APIRouter()
+
+# ==========================================
+# NEW ROUTES FOR v0 ADMIN DASHBOARD
+# ==========================================
+
+# 1. GET /analytics
 @router.get("/analytics")
 async def admin_analytics(admin = Depends(isAdmin)):
     try:
@@ -38,7 +49,7 @@ async def admin_analytics(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 2. GET /api/admin/infrastructure
+# 2. GET /infrastructure
 @router.get("/infrastructure")
 async def admin_infrastructure(admin = Depends(isAdmin)):
     try:
@@ -68,7 +79,7 @@ async def admin_infrastructure(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 3. GET /api/admin/subscriptions
+# 3. GET /subscriptions
 @router.get("/subscriptions")
 async def admin_subscriptions(admin = Depends(isAdmin)):
     try:
@@ -91,7 +102,7 @@ async def admin_subscriptions(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 4. GET & PUT /api/admin/settings
+# 4. GET & PUT /settings
 @router.get("/settings")
 async def admin_settings(admin = Depends(isAdmin)):
     try:
@@ -99,6 +110,7 @@ async def admin_settings(admin = Depends(isAdmin)):
         if settings_doc:
             settings_doc.pop("_id", None)
             return JSONResponse(settings_doc)
+        
         # Mocked settings
         return JSONResponse({
             "openai_model_version": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini"),
@@ -113,21 +125,15 @@ async def update_admin_settings(body: dict = Body(...), admin = Depends(isAdmin)
         if hasattr(db.get_db(), "global_settings"):
             await db.get_db().global_settings.update_one({}, {"$set": body}, upsert=True)
             return JSONResponse({"success": True, "updated": body})
-        # Mock update
         return JSONResponse({"success": True, "updated": body, "mocked": True})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-from fastapi import APIRouter, Depends, HTTPException, Body
-from app.core.database import db
-from app.core.deps import get_admin_user
-from app.models.user import UserInDB
-from bson import ObjectId
-from datetime import datetime
-from app.middleware.adminAuth import isAdmin
 
-router = APIRouter()
+# ==========================================
+# EXISTING CORE ADMIN ROUTES
+# ==========================================
 
-# 1. GET /stats - Overall system stats
+# 5. GET /stats - Overall system stats
 @router.get("/stats")
 async def get_stats(admin = Depends(isAdmin)):
     total_users = await db.get_db().users.count_documents({})
@@ -146,7 +152,7 @@ async def get_stats(admin = Depends(isAdmin)):
         "plan_breakdown": plan_breakdown
     }
 
-# 2. GET /users - Get all users with their shop info
+# 6. GET /users - Get all users with their shop info
 @router.get("/users")
 async def get_all_users(admin = Depends(isAdmin)):
     users = await db.get_db().users.find({}).to_list(1000)
@@ -169,21 +175,29 @@ async def get_all_users(admin = Depends(isAdmin)):
         })
     return result
 
-# 3. GET /users/{user_id} - Get single user detail
+# 7. GET /users/{user_id} - Get single user detail
 @router.get("/users/{user_id}")
 async def get_user_detail(user_id: str, admin = Depends(isAdmin)):
     user = await db.get_db().users.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # ObjectId ko string me convert karna taake JSON easily parse ho jaye
+    user["_id"] = str(user["_id"])
+    
     shop = await db.get_db().shops.find_one({"userId": user_id})
-    conversations_count = await db.get_db().conversations.count_documents({"shopId": str(shop["_id"])}) if shop else 0
+    conversations_count = 0
+    if shop:
+        shop["_id"] = str(shop["_id"])
+        conversations_count = await db.get_db().conversations.count_documents({"shopId": shop["_id"]})
+        
     return {
         "user": user,
         "shop": shop,
         "recent_conversations_count": conversations_count
     }
 
-# 4. PUT /users/{user_id}/plan - Update user plan
+# 8. PUT /users/{user_id}/plan - Update user plan
 @router.put("/users/{user_id}/plan")
 async def update_user_plan(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     plan = body.get("plan")
@@ -194,9 +208,10 @@ async def update_user_plan(user_id: str, body: dict = Body(...), admin = Depends
         raise HTTPException(status_code=404, detail="Shop not found")
     await db.get_db().shops.update_one({"userId": user_id}, {"$set": {"plan": plan}})
     updated_shop = await db.get_db().shops.find_one({"userId": user_id})
+    updated_shop["_id"] = str(updated_shop["_id"])
     return updated_shop
 
-# 5. PUT /users/{user_id}/status - Block/unblock user
+# 9. PUT /users/{user_id}/status - Block/unblock user
 @router.put("/users/{user_id}/status")
 async def update_user_status(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     is_active = body.get("is_active")
@@ -204,9 +219,10 @@ async def update_user_status(user_id: str, body: dict = Body(...), admin = Depen
         raise HTTPException(status_code=400, detail="Invalid status")
     await db.get_db().users.update_one({"_id": ObjectId(user_id)}, {"$set": {"is_active": is_active}})
     user = await db.get_db().users.find_one({"_id": ObjectId(user_id)})
+    user["_id"] = str(user["_id"])
     return user
 
-# 6. GET /shops - Get all shops with WhatsApp status
+# 10. GET /shops - Get all shops with WhatsApp status
 @router.get("/shops")
 async def get_all_shops(admin = Depends(isAdmin)):
     shops = await db.get_db().shops.find({}).to_list(1000)
@@ -224,7 +240,7 @@ async def get_all_shops(admin = Depends(isAdmin)):
         })
     return result
 
-# 7. GET /conversations - Recent conversations across all shops
+# 11. GET /conversations - Recent conversations across all shops
 @router.get("/conversations")
 async def get_recent_conversations(admin = Depends(isAdmin)):
     conversations = await db.get_db().conversations.find({}).sort("updatedAt", -1).limit(50).to_list(50)
@@ -240,7 +256,7 @@ async def get_recent_conversations(admin = Depends(isAdmin)):
         })
     return result
 
-# 8. DELETE /users/{user_id} - Delete user and their shop data
+# 12. DELETE /users/{user_id} - Delete user and their shop data
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, admin = Depends(isAdmin)):
     await db.get_db().users.delete_one({"_id": ObjectId(user_id)})
@@ -248,3 +264,4 @@ async def delete_user(user_id: str, admin = Depends(isAdmin)):
     await db.get_db().conversations.delete_many({"shopId": user_id})
     await db.get_db().knowledge_base.delete_many({"shopId": user_id})
     return {"deleted": True, "user_id": user_id}
+
