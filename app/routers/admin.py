@@ -1,14 +1,53 @@
+
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
 import random
 import os
 from bson import ObjectId
-
+from pydantic import BaseModel
+from app.core.security import verify_password, create_access_token, create_refresh_token
 from app.core.database import db
 from app.middleware.adminAuth import isAdmin
 
+
 router = APIRouter()
+
+# --- ADMIN LOGIN ENDPOINT ---
+class AdminLoginRequest(BaseModel):
+    phone: str
+    password: str
+
+@router.post("/login")
+async def admin_login(request: AdminLoginRequest):
+    user = await db.get_db().users.find_one({"phone": request.phone})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid phone or password")
+    if not user.get("hashed_password"):
+        raise HTTPException(status_code=401, detail="This account has no password set. Please set a password in database.")
+    if not verify_password(request.password, user.get("hashed_password", "")):
+        raise HTTPException(status_code=401, detail="Invalid phone or password")
+    role = user.get("role")
+    admin_phone = os.getenv("ADMIN_PHONE_NUMBER", "")
+    is_admin = (role == "admin") or (admin_phone and request.phone == admin_phone)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    access_token = create_access_token(data={
+        "sub": user["phone"],
+        "role": "admin",
+        "phone": user["phone"]
+    })
+    refresh_token = create_refresh_token(data={"sub": user["phone"]})
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "phone": user["phone"],
+            "name": user.get("name"),
+            "role": "admin"
+        }
+    }
 
 # ==========================================
 # NEW ROUTES FOR v0 ADMIN DASHBOARD
