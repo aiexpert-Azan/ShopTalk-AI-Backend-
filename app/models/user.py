@@ -4,19 +4,8 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 
 class UserBase(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=30)
-    phone: str = Field(..., min_length=10, max_length=15)
+    phone: str
     email: Optional[EmailStr] = None
-
-    @field_validator('phone')
-    @classmethod
-    def validate_phone(cls, v: str) -> str:
-        if v.startswith('+92') and len(v) == 13:
-            return v
-        if v.startswith('92') and len(v) == 12:
-            return v
-        if v.startswith('03') and len(v) == 11 and v.isdigit():
-            return v
-        raise ValueError("Valid Pakistani number required (03XXXXXXXXX or +92XXXXXXXXX)")
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
@@ -30,9 +19,10 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
 
 class UserInDB(UserBase):
+    phone: str
     id: Optional[str] = Field(None, alias="_id")
     plan: str = "starter"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
     is_active: bool = True
     ai_active: bool = False
     phone_verified: bool = False
