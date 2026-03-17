@@ -143,7 +143,7 @@ async def login(form_data: UserLogin):
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 # --- FIREBASE VERIFY ---
-@@router.post("/firebase-verify", response_model=Token)
+@router.post("/firebase-verify", response_model=Token)
 async def firebase_verify(request: VerifyTokenRequest):
     if not initialize_firebase_admin():
         raise HTTPException(
