@@ -6,7 +6,6 @@ from app.core.config import settings
 from app.core.database import db
 from app.models.user import UserInDB
 
-# tokenUrl points to the OAuth2-compatible endpoint — this powers the Swagger 🔒 Authorize button
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login/token")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserInDB:
@@ -30,9 +29,28 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserInDB:
             detail="User not found",
         )
 
-    # Convert ObjectId to string for Pydantic
     user_data["_id"] = str(user_data["_id"])
-    return UserInDB(**user_data)
+
+    safe_data = {
+        "_id": user_data.get("_id"),
+        "phone": user_data.get("phone", ""),
+        "name": user_data.get("name"),
+        "email": user_data.get("email"),
+        "plan": user_data.get("plan", "starter"),
+        "created_at": user_data.get("created_at"),
+        "is_active": user_data.get("is_active", True),
+        "ai_active": user_data.get("ai_active", False),
+        "phone_verified": user_data.get("phone_verified", False),
+        "hashed_password": user_data.get("hashed_password"),
+    }
+
+    try:
+        return UserInDB(**safe_data)
+    except ValidationError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"User data validation error: {str(e)}"
+        )
 
 async def get_admin_user(current_user: UserInDB = Depends(get_current_user)):
     if getattr(current_user, 'role', None) != "admin":

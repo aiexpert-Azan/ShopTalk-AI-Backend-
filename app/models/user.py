@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 
@@ -10,14 +10,13 @@ class UserBase(BaseModel):
     @field_validator('phone')
     @classmethod
     def validate_phone(cls, v: str) -> str:
-        # Allow both 03XXXXXXXXX and +92XXXXXXXXX formats
         if v.startswith('+92') and len(v) == 13:
             return v
         if v.startswith('92') and len(v) == 12:
             return v
         if v.startswith('03') and len(v) == 11 and v.isdigit():
             return v
-        raise ValueError("Please enter a valid Pakistani mobile number (03XXXXXXXXX or +92XXXXXXXXX)")
+        raise ValueError("Valid Pakistani number required (03XXXXXXXXX or +92XXXXXXXXX)")
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
@@ -37,7 +36,7 @@ class UserInDB(UserBase):
     is_active: bool = True
     ai_active: bool = False
     phone_verified: bool = False
-    hashed_password: Optional[str] = None  # Optional for Firebase users
+    hashed_password: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)
 
