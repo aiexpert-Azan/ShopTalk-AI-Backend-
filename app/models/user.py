@@ -4,19 +4,20 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict, field_validator
 
 class UserBase(BaseModel):
     name: Optional[str] = Field(None, min_length=2, max_length=30)
-    phone: str = Field(..., min_length=11, max_length=11)
+    phone: str = Field(..., min_length=10, max_length=15)
     email: Optional[EmailStr] = None
 
     @field_validator('phone')
     @classmethod
-    def validate_pakistani_phone(cls, v: str) -> str:
-        if not v.isdigit():
-            raise ValueError("Phone number must contain only digits")
-        if len(v) != 11:
-            raise ValueError("Phone number must be exactly 11 digits")
-        if not v.startswith('03'):
-            raise ValueError("Please enter a valid Pakistani mobile number starting with 03")
-        return v
+    def validate_phone(cls, v: str) -> str:
+        # Allow both 03XXXXXXXXX and +92XXXXXXXXX formats
+        if v.startswith('+92') and len(v) == 13:
+            return v
+        if v.startswith('92') and len(v) == 12:
+            return v
+        if v.startswith('03') and len(v) == 11 and v.isdigit():
+            return v
+        raise ValueError("Please enter a valid Pakistani mobile number (03XXXXXXXXX or +92XXXXXXXXX)")
 
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
@@ -36,7 +37,7 @@ class UserInDB(UserBase):
     is_active: bool = True
     ai_active: bool = False
     phone_verified: bool = False
-    hashed_password: str
+    hashed_password: Optional[str] = None  # Optional for Firebase users
 
     model_config = ConfigDict(populate_by_name=True)
 
