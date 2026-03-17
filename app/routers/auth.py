@@ -145,51 +145,69 @@ async def login(form_data: UserLogin):
 # --- FIREBASE VERIFY ---
 @router.post("/firebase-verify", response_model=Token)
 async def firebase_verify(request: VerifyTokenRequest):
-    # Initialize app if needed
     if not initialize_firebase_admin():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, 
-            detail="Firebase Service Unavailable (Config Error)"
-        )
+        raise HTTPException(status_code=503, detail="Firebase Service Unavailable")
 
-    # Verify Token
     try:
         decoded = firebase_auth.verify_id_token(request.id_token)
     except Exception as e:
-        logger.warning(f"Token verification failed: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Firebase ID token"
-        )
+        raise HTTPException(status_code=401, detail="Invalid Firebase ID token")
 
-    # Phone number logic
     fb_phone = decoded.get("phone_number")
     phone = fb_phone or request.phone_number
-    
+
     if not phone:
         raise HTTPException(status_code=400, detail="Phone number required")
 
-    # DB User check/create
-    user = await db.get_db().users.find_one({"phone": phone})
-    if not user:
-        new_user = {
-            "phone": phone,
-            "name": request.name or decoded.get("name") or "User",
-            "email": request.email or decoded.get("email"),
-            "phone_verified": True,
-            "is_active": True,
-            "plan": "starter",
-            "created_at": datetime.utcnow()
-        }
-        await db.get_db().users.insert_one(new_user)
+    # Normalize phone — always store as +92XXXXXXXXX
+    def normalize_phone(p: str) -> str:
+        p = p.strip()
+        if p.startswith('+92'):
+            return p
+        if p.startswith('92'):
+            return '+' + p
+        if p.startswith('0'):
+            return '+92' + p[1:]
+        return p
 
-    # Issue Tokens
-    access_token = create_access_token(data={"sub": phone})
-    refresh_token = create_refresh_token(data={"sub": phone})
+    normalized_phone = normalize_phone(phone)
+
+    # Check BOTH formats in DB
+    user = await db.get_db().users.find_one({
+        "$or": [
+            {"phone": normalized_phone},
+            {"phone": "0" + normalized_phone[3:]}  # 03XXXXXXXXX format
+        ]
+    })
+
+    if user:
+        # User exists — just login, don't create new
+        access_token = create_access_token(data={"sub": normalized_phone, "phone": normalized_phone})
+        refresh_token = create_refresh_token(data={"sub": normalized_phone})
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+
+    # New user — create account
+    new_user = {
+        "phone": normalized_phone,
+        "name": request.name or decoded.get("name") or "User",
+        "email": request.email or decoded.get("email"),
+        "phone_verified": True,
+        "is_active": True,
+        "plan": "starter",
+        "created_at": datetime.utcnow()
+    }
+    await db.get_db().users.insert_one(new_user)
+
+    access_token = create_access_token(data={"sub": normalized_phone, "phone": normalized_phone})
+    refresh_token = create_refresh_token(data={"sub": normalized_phone})
 
     return {
-        "access_token": access_token, 
-        "refresh_token": refresh_token, 
+        "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer"
     }
 
