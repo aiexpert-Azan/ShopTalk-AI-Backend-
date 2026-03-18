@@ -1,20 +1,21 @@
 import asyncio
-from motor.motor_asyncio import AsyncIOMotorClient
-from urllib.parse import quote_plus
+from app.core.database import db
+from app.core.security import get_password_hash
 
-async def make_admin():
-    username = quote_plus("azanshoptalkai")
-    password = quote_plus("Az%nxh2610")  # apna password yahan
+async def set_admin():
+    await db.connect()
+    phone = "+923269157985"  # ← apna number daalo
+    password = "Az@nxh2610s"  # ← apna password daalo
     
-    MONGODB_URL = f"mongodb+srv://{username}:{password}@shoptalk-cluster.mongocluster.cosmos.azure.com/?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000"
-    
-    client = AsyncIOMotorClient(MONGODB_URL)
-    db = client["shoptalk-cluster"]
-    result = await db.users.update_one(
-        {"phone": "03269157985"},
-        {"$set": {"role": "admin"}}
+    hashed = get_password_hash(password)
+    result = await db.get_db().users.update_one(
+        {"phone": phone},
+        {"$set": {
+            "hashed_password": hashed,
+            "role": "admin"
+        }}
     )
-    print("Modified:", result.modified_count)
-    client.close()
+    print(f"Modified: {result.modified_count}")
+    print("Done!")
 
-asyncio.run(make_admin())
+asyncio.run(set_admin())
