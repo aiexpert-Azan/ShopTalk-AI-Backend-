@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, UploadFile, File
+from pypdf import PdfReader
+import json
 from app.core.database import db
 from app.core.deps import get_current_user
 from app.models.user import UserInDB
@@ -7,6 +9,87 @@ from datetime import datetime
 from bson import ObjectId
 
 router = APIRouter()
+
+
+# --- Knowledge Base PDF Import Endpoint ---
+from app.services.ai_service import ai_service
+
+@router.post("/import-pdf")
+async def import_knowledge_base_pdf(
+    file: UploadFile = File(...),
+    current_user: UserInDB = Depends(get_current_user)
+):
+    # File validation
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Invalid file type. Only PDF allowed.")
+    if file.size and file.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB)")
+
+    # Get shopId
+    shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    shop_id = str(shop["_id"])
+
+    # Read PDF and extract text
+    content = await file.read()
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        extracted_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to read PDF: {e}")
+    if not extracted_text.strip():
+        raise HTTPException(status_code=400, detail="No text found in PDF.")
+
+    # Call Azure OpenAI to extract Q&A pairs
+    prompt = (
+        "Extract FAQ question and answer pairs from this document. "
+        "Return ONLY a JSON array like: "
+        "[{'question': '...', 'answer': '...'}, ...] "
+        "Extract as many relevant Q&A pairs as possible.\n"
+        f"Document text: {extracted_text[:6000]}"
+    )
+    try:
+        response = await ai_service.client.chat.completions.create(
+            model=ai_service.client._config["deployment_name"] if hasattr(ai_service.client, "_config") and "deployment_name" in ai_service.client._config else None,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=1200
+        )
+        answer = response.choices[0].message.content
+        try:
+            qa_pairs = json.loads(answer.replace("'", '"'))
+        except Exception:
+            qa_pairs = json.loads(answer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI extraction failed: {e}")
+
+    if not isinstance(qa_pairs, list):
+        raise HTTPException(status_code=500, detail="AI did not return a list of Q&A pairs.")
+
+    imported = 0
+    questions = []
+    for qa in qa_pairs:
+        try:
+            question = qa.get("question")
+            answer = qa.get("answer")
+            if not question or not answer:
+                continue
+            doc = {
+                "shopId": shop_id,
+                "question": question,
+                "answer": answer,
+                "is_active": True,
+                "source": "pdf_import",
+                "created_at": datetime.utcnow()
+            }
+            await db.get_db().knowledge_base.insert_one(doc)
+            imported += 1
+            questions.append(question)
+        except Exception as e:
+            continue
+
+    return {"imported": imported, "questions": questions}
 
 # Helper to convert MongoDB document to dict
 
