@@ -27,6 +27,7 @@ app.add_middleware(
     allow_origins=[
         "https://shoptalkai.app",
         "https://www.shoptalkai.app",
+        "https://admin.shoptalkai.app",
         "https://v0-shopkeeper-ai-setup.vercel.app",
         "https://v0-admin-panel-for-shop-talk.vercel.app",
         "http://localhost:3000"
