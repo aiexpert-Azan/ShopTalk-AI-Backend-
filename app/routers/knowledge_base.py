@@ -30,12 +30,19 @@ async def import_knowledge_base_pdf(
     shop_id = str(shop["_id"])
 
     content = await file.read()
+    
+    print(f"[DEBUG] File received: {file.filename}")
+    print(f"[DEBUG] File size: {len(content)} bytes")
+    
     try:
         reader = PdfReader(io.BytesIO(content))
         extracted_text = "\n".join(page.extract_text() or "" for page in reader.pages)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read PDF: {e}")
-    
+
+    print(f"[DEBUG] Extracted text length: {len(extracted_text)}")
+    print(f"[DEBUG] Text preview: {extracted_text[:300]}")
+
     if not extracted_text.strip():
         raise HTTPException(status_code=400, detail="No text found in PDF.")
 
@@ -47,7 +54,7 @@ async def import_knowledge_base_pdf(
         "Do not include any text before or after the JSON array.\n"
         f"Document text: {extracted_text[:6000]}"
     )
-    
+
     try:
         response = await ai_service.client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
@@ -56,6 +63,9 @@ async def import_knowledge_base_pdf(
             max_tokens=1200
         )
         answer = response.choices[0].message.content.strip()
+        
+        print(f"[DEBUG] AI raw response: {answer}")
+        
         # Clean up response
         if answer.startswith("```"):
             answer = answer.split("```")[1]
@@ -63,6 +73,9 @@ async def import_knowledge_base_pdf(
                 answer = answer[4:]
         answer = answer.strip()
         qa_pairs = json.loads(answer)
+        
+        print(f"[DEBUG] QA pairs count: {len(qa_pairs)}")
+        
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="AI returned invalid JSON. Try a different PDF.")
     except Exception as e:
@@ -95,10 +108,12 @@ async def import_knowledge_base_pdf(
 
     return {"imported": imported, "questions": questions}
 
+
 def qa_to_dict(qa):
     qa["id"] = str(qa["_id"])
     qa.pop("_id", None)
     return qa
+
 
 @router.get("/", response_model=List[dict])
 async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user)):
@@ -111,6 +126,7 @@ async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user))
         raise HTTPException(status_code=404, detail="Shop not found")
     qa_pairs = await db.get_db().knowledge_base.find({"shopId": str(shop["_id"])}).to_list(100)
     return [qa_to_dict(qa) for qa in qa_pairs]
+
 
 @router.post("/", response_model=dict)
 async def add_qa_pair(
@@ -136,6 +152,7 @@ async def add_qa_pair(
     qa_doc["_id"] = result.inserted_id
     return qa_to_dict(qa_doc)
 
+
 @router.put("/{qa_id}", response_model=dict)
 async def update_qa_pair(
     qa_id: str,
@@ -157,6 +174,7 @@ async def update_qa_pair(
         raise HTTPException(status_code=404, detail="Q&A pair not found")
     qa = await db.get_db().knowledge_base.find_one({"_id": ObjectId(qa_id)})
     return qa_to_dict(qa)
+
 
 @router.delete("/{qa_id}", response_model=dict)
 async def delete_qa_pair(
