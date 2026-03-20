@@ -41,8 +41,10 @@ async def import_knowledge_base_pdf(
 
     prompt = (
         "Extract FAQ question and answer pairs from this document. "
+        "Also assign a category to each pair from these options ONLY: "
+        "General, Products, Delivery, Returns, Timing, Billing, Other. "
         "Return ONLY a valid JSON array like: "
-        '[{"question": "...", "answer": "..."}, ...] '
+        '[{"question": "...", "answer": "...", "category": "General"}, ...] '
         "Extract as many relevant Q&A pairs as possible. "
         "Do not include any text before or after the JSON array.\n"
         f"Document text: {extracted_text[:6000]}"
@@ -80,10 +82,11 @@ async def import_knowledge_base_pdf(
         try:
             question = qa.get("question")
             answer = qa.get("answer")
+            category = qa.get("category", "General")
+
             if not question or not answer:
                 continue
 
-            # Duplicate check
             existing = await db.get_db().knowledge_base.find_one({
                 "shopId": shop_id,
                 "question": question
@@ -96,7 +99,7 @@ async def import_knowledge_base_pdf(
                 "shopId": shop_id,
                 "question": question,
                 "answer": answer,
-                "category": "General",
+                "category": category,
                 "is_active": True,
                 "source": "pdf_import",
                 "created_at": datetime.utcnow()
