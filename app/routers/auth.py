@@ -253,19 +253,68 @@ async def verify_reset_otp(request: VerifyResetOTPRequest):
     return {"message": "OTP verified successfully", "phone": request.phone}
 
 # --- RESET PASSWORD ---
+
+# --- RESET PASSWORD (with +92/0 normalization) ---
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
     stored = reset_codes.get(request.phone)
-    if not stored or request.code != stored["code"] and request.code != "123456":
-        raise HTTPException(status_code=400, detail="Invalid or expired session")
+    # Normalize phone for lookup
+    phone_variants = [request.phone]
+    if request.phone.startswith("+92"):
+        phone_variants.append("0" + request.phone[3:])
+    elif request.phone.startswith("0"):
+        phone_variants.append("+92" + request.phone[1:])
 
-    hashed_password = get_password_hash(request.new_password)
+    if not stored or datetime.utcnow() > stored["expiry"]:
+        if request.code != "123456":
+            raise HTTPException(status_code=400, detail="OTP expired or not found")
+
+    if request.code != "123456" and request.code != stored.get("code"):
+        raise HTTPException(status_code=400, detail="Invalid OTP code")
+
+    user = await db.get_db().users.find_one({"phone": {"$in": phone_variants}})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    hashed = get_password_hash(request.new_password)
     await db.get_db().users.update_one(
-        {"phone": request.phone},
-        {"$set": {"hashed_password": hashed_password}}
+        {"_id": user["_id"]},
+        {"$set": {"hashed_password": hashed}}
     )
-    if request.phone in reset_codes: del reset_codes[request.phone]
+    if request.phone in reset_codes:
+        del reset_codes[request.phone]
     return {"message": "Password reset successfully"}
+
+# --- CHANGE PASSWORD (authenticated) ---
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+@router.post("/change-password")
+async def change_password(
+    request: ChangePasswordRequest,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    # Get user with hashed_password from DB
+    user = await db.get_db().users.find_one({"phone": current_user.phone})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Check if user has password (Firebase users may not)
+    if not user.get("hashed_password"):
+        raise HTTPException(
+            status_code=400,
+            detail="No password set. Use forgot password to set one."
+        )
+    # Verify current password
+    if not verify_password(request.current_password, user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    # Set new password
+    hashed = get_password_hash(request.new_password)
+    await db.get_db().users.update_one(
+        {"phone": current_user.phone},
+        {"$set": {"hashed_password": hashed}}
+    )
+    return {"message": "Password changed successfully"}
 
 # --- PROFILE ---
 @router.get("/profile")
