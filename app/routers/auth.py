@@ -268,6 +268,14 @@ async def reset_password(request: ResetPasswordRequest):
     return {"message": "Password reset successfully"}
 
 # --- PROFILE ---
-@router.get("/profile", response_model=UserResponse)
+@router.get("/profile")
 async def read_users_me(current_user: UserInDB = Depends(get_current_user)):
-    return current_user
+    return {
+        "phone": current_user.phone,
+        "name": current_user.name,
+        "email": current_user.email,
+        "plan": current_user.plan,
+        "is_active": current_user.is_active,
+        "phone_verified": current_user.phone_verified,
+        "ai_active": current_user.ai_active,
+    }
