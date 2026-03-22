@@ -17,3 +17,4 @@ sendgrid==6.11.0
 firebase-admin==6.5.0
 openpyxl
 pypdf
+slowapi==0.1.9

@@ -1,4 +1,5 @@
 
+
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
@@ -6,9 +7,82 @@ import random
 import os
 from bson import ObjectId
 from pydantic import BaseModel
+from typing import Optional
 from app.core.security import verify_password, create_access_token, create_refresh_token
 from app.core.database import db
 from app.middleware.adminAuth import isAdmin
+from app.core.deps import get_current_user
+from app.models.user import UserInDB
+# --- Plan Upgrade Request Model ---
+class PlanUpgradeRequest(BaseModel):
+    requested_plan: str
+    reason: Optional[str] = None
+
+# --- Request Plan Upgrade Endpoint ---
+@router.post("/upgrade-request")
+async def request_plan_upgrade(
+    request: PlanUpgradeRequest,
+    current_user: UserInDB = Depends(get_current_user)
+):
+    if request.requested_plan not in ["starter", "growth", "business"]:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    upgrade_request = {
+        "userId": str(current_user.id),
+        "shopId": str(shop["_id"]),
+        "shop_name": shop.get("name"),
+        "phone": current_user.phone,
+        "current_plan": shop.get("plan", "free"),
+        "requested_plan": request.requested_plan,
+        "reason": request.reason,
+        "status": "pending",
+        "created_at": datetime.utcnow()
+    }
+    await db.get_db().upgrade_requests.insert_one(upgrade_request)
+    return {"message": "Upgrade request submitted. Admin will review and activate your plan shortly."}
+
+# --- Get All Upgrade Requests (Admin) ---
+@router.get("/upgrade-requests")
+async def get_upgrade_requests(admin = Depends(isAdmin)):
+    requests = await db.get_db().upgrade_requests.find({}).sort("created_at", -1).to_list(100)
+    result = []
+    for req in requests:
+        req["_id"] = str(req["_id"])
+        result.append(req)
+    return result
+
+# --- Approve Upgrade Request (Admin) ---
+@router.post("/upgrade-requests/{request_id}/approve")
+async def approve_upgrade_request(
+    request_id: str,
+    admin = Depends(isAdmin)
+):
+    upgrade_req = await db.get_db().upgrade_requests.find_one({"_id": ObjectId(request_id)})
+    if not upgrade_req:
+        raise HTTPException(status_code=404, detail="Request not found")
+    await db.get_db().shops.update_one(
+        {"_id": ObjectId(upgrade_req["shopId"])} ,
+        {"$set": {"plan": upgrade_req["requested_plan"]}}
+    )
+    await db.get_db().upgrade_requests.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {"status": "approved", "approved_at": datetime.utcnow()}}
+    )
+    return {"message": f"Plan upgraded to {upgrade_req['requested_plan']} successfully"}
+
+# --- Reject Upgrade Request (Admin) ---
+@router.post("/upgrade-requests/{request_id}/reject")
+async def reject_upgrade_request(
+    request_id: str,
+    admin = Depends(isAdmin)
+):
+    await db.get_db().upgrade_requests.update_one(
+        {"_id": ObjectId(request_id)},
+        {"$set": {"status": "rejected", "rejected_at": datetime.utcnow()}}
+    )
+    return {"message": "Request rejected"}
 
 
 router = APIRouter()

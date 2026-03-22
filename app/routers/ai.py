@@ -15,7 +15,7 @@ from fastapi import Body
 
 # Plan message limits
 PLAN_LIMITS = {
-    "free": 100,
+    "free": 200,
     "starter": 1000,
     "growth": 5000,
     "business": float('inf')

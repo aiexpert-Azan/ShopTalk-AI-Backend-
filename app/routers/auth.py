@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from app.main import limiter
 from pydantic import BaseModel, EmailStr, validator, Field
 import logging
 import os
@@ -110,7 +111,8 @@ def initialize_firebase_admin():
 
 # --- SIGNUP ---
 @router.post("/signup", response_model=Token)
-async def signup(user: UserCreate):
+@limiter.limit("3/minute")
+async def signup(request: Request, user: UserCreate):
     user_exists = await db.get_db().users.find_one({"phone": user.phone})
     if user_exists:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered")
@@ -121,7 +123,7 @@ async def signup(user: UserCreate):
         **user_data,
         "hashed_password": hashed_password,
         "phone_verified": True,
-        "plan": "starter",
+        "plan": "free",
         "is_active": True,
         "created_at": datetime.utcnow()
     }
@@ -133,7 +135,8 @@ async def signup(user: UserCreate):
 
 # --- LOGIN ---
 @router.post("/login", response_model=Token)
-async def login(form_data: UserLogin):
+@limiter.limit("5/minute")
+async def login(request: Request, form_data: UserLogin):
     user = await db.get_db().users.find_one({"phone": form_data.phone})
     if not user or not verify_password(form_data.password, user["hashed_password"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect phone or password")
@@ -144,7 +147,8 @@ async def login(form_data: UserLogin):
 
 # --- FIREBASE VERIFY ---
 @router.post("/firebase-verify", response_model=Token)
-async def firebase_verify(request: VerifyTokenRequest):
+@limiter.limit("10/minute")
+async def firebase_verify(request: Request, request_data: VerifyTokenRequest):
     if not initialize_firebase_admin():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -152,7 +156,7 @@ async def firebase_verify(request: VerifyTokenRequest):
         )
 
     try:
-        decoded = firebase_auth.verify_id_token(request.id_token)
+        decoded = firebase_auth.verify_id_token(request_data.id_token)
     except Exception as e:
         logger.warning(f"Token verification failed: {str(e)}")
         raise HTTPException(
@@ -204,11 +208,11 @@ async def firebase_verify(request: VerifyTokenRequest):
     # New user
     new_user = {
         "phone": normalized_phone,
-        "name": request.name or decoded.get("name") or "User",
-        "email": request.email or decoded.get("email"),
+        "name": request_data.name or decoded.get("name") or "User",
+        "email": request_data.email or decoded.get("email"),
         "phone_verified": True,
         "is_active": True,
-        "plan": "starter",
+        "plan": "free",
         "created_at": datetime.utcnow()
     }
     await db.get_db().users.insert_one(new_user)
@@ -227,7 +231,17 @@ async def firebase_verify(request: VerifyTokenRequest):
 
 # --- FORGOT PASSWORD ---
 @router.post("/forgot-password", response_model=ResetOTPResponse)
-async def forgot_password(request: ForgotPasswordRequest):
+@limiter.limit("3/minute")
+async def forgot_password(request: Request, request_data: ForgotPasswordRequest):
+    phone = request_data.phone
+    user = await db.get_db().users.find_one({"phone": phone})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this phone number.")
+    code = str(random.randint(100000, 999999))
+    expiry = datetime.utcnow() + timedelta(minutes=10)
+    reset_codes[phone] = {"code": code, "expiry": expiry}
+    logger.info(f"Password reset OTP for {phone}: {code}")
+    return ResetOTPResponse(message="OTP sent. Use 123456 for testing.", phone=phone)
     phone = request.phone
     user = await db.get_db().users.find_one({"phone": phone})
     if not user:
