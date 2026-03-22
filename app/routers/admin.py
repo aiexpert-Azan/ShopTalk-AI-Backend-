@@ -1,5 +1,3 @@
-
-
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
@@ -13,10 +11,50 @@ from app.core.database import db
 from app.middleware.adminAuth import isAdmin
 from app.core.deps import get_current_user
 from app.models.user import UserInDB
+
+router = APIRouter()
+
 # --- Plan Upgrade Request Model ---
 class PlanUpgradeRequest(BaseModel):
     requested_plan: str
     reason: Optional[str] = None
+
+# --- Admin Login Model ---
+class AdminLoginRequest(BaseModel):
+    phone: str
+    password: str
+
+# --- ADMIN LOGIN ENDPOINT ---
+@router.post("/login")
+async def admin_login(request: AdminLoginRequest):
+    user = await db.get_db().users.find_one({"phone": request.phone})
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid phone or password")
+    if not user.get("hashed_password"):
+        raise HTTPException(status_code=401, detail="This account has no password set.")
+    if not verify_password(request.password, user.get("hashed_password", "")):
+        raise HTTPException(status_code=401, detail="Invalid phone or password")
+    role = user.get("role")
+    admin_phone = os.getenv("ADMIN_PHONE_NUMBER", "")
+    is_admin = (role == "admin") or (admin_phone and request.phone == admin_phone)
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    access_token = create_access_token(data={
+        "sub": user["phone"],
+        "role": "admin",
+        "phone": user["phone"]
+    })
+    refresh_token = create_refresh_token(data={"sub": user["phone"]})
+    return {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "token_type": "bearer",
+        "user": {
+            "phone": user["phone"],
+            "name": user.get("name"),
+            "role": "admin"
+        }
+    }
 
 # --- Request Plan Upgrade Endpoint ---
 @router.post("/upgrade-request")
@@ -63,7 +101,7 @@ async def approve_upgrade_request(
     if not upgrade_req:
         raise HTTPException(status_code=404, detail="Request not found")
     await db.get_db().shops.update_one(
-        {"_id": ObjectId(upgrade_req["shopId"])} ,
+        {"_id": ObjectId(upgrade_req["shopId"])},
         {"$set": {"plan": upgrade_req["requested_plan"]}}
     )
     await db.get_db().upgrade_requests.update_one(
@@ -84,54 +122,10 @@ async def reject_upgrade_request(
     )
     return {"message": "Request rejected"}
 
-
-router = APIRouter()
-
-# --- ADMIN LOGIN ENDPOINT ---
-class AdminLoginRequest(BaseModel):
-    phone: str
-    password: str
-
-@router.post("/login")
-async def admin_login(request: AdminLoginRequest):
-    user = await db.get_db().users.find_one({"phone": request.phone})
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid phone or password")
-    if not user.get("hashed_password"):
-        raise HTTPException(status_code=401, detail="This account has no password set. Please set a password in database.")
-    if not verify_password(request.password, user.get("hashed_password", "")):
-        raise HTTPException(status_code=401, detail="Invalid phone or password")
-    role = user.get("role")
-    admin_phone = os.getenv("ADMIN_PHONE_NUMBER", "")
-    is_admin = (role == "admin") or (admin_phone and request.phone == admin_phone)
-    if not is_admin:
-        raise HTTPException(status_code=403, detail="Admin access required")
-    access_token = create_access_token(data={
-        "sub": user["phone"],
-        "role": "admin",
-        "phone": user["phone"]
-    })
-    refresh_token = create_refresh_token(data={"sub": user["phone"]})
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-        "user": {
-            "phone": user["phone"],
-            "name": user.get("name"),
-            "role": "admin"
-        }
-    }
-
-# ==========================================
-# NEW ROUTES FOR v0 ADMIN DASHBOARD
-# ==========================================
-
-# 1. GET /analytics
+# --- Analytics ---
 @router.get("/analytics")
 async def admin_analytics(admin = Depends(isAdmin)):
     try:
-        # Mock revenue calculation
         plans = ["free", "starter", "growth", "business"]
         plan_prices = {"free": 0, "starter": 49, "growth": 99, "business": 199}
         shops = await db.get_db().shops.find({}).to_list(1000)
@@ -140,8 +134,6 @@ async def admin_analytics(admin = Depends(isAdmin)):
             plan = shop.get("plan", "free")
             revenue_by_plan[plan] += plan_prices.get(plan, 0)
         total_revenue = sum(revenue_by_plan.values())
-
-        # Messages processed over last 7 days
         today = datetime.utcnow()
         messages_time_series = []
         for i in range(7):
@@ -149,10 +141,7 @@ async def admin_analytics(admin = Depends(isAdmin)):
             count = await db.get_db().conversations.count_documents({"updatedAt": {"$gte": day, "$lt": day + timedelta(days=1)}})
             messages_time_series.append({"date": day.strftime("%Y-%m-%d"), "count": count})
         messages_time_series.reverse()
-
-        # Revenue by plan breakdown
         plan_breakdown = {p: await db.get_db().shops.count_documents({"plan": p}) for p in plans}
-
         return JSONResponse({
             "total_revenue": total_revenue,
             "messages_time_series": messages_time_series,
@@ -162,27 +151,21 @@ async def admin_analytics(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 2. GET /infrastructure
+# --- Infrastructure ---
 @router.get("/infrastructure")
 async def admin_infrastructure(admin = Depends(isAdmin)):
     try:
-        # Mock CPU/RAM usage
         cpu_usage = round(random.uniform(10, 60), 2)
         ram_usage = round(random.uniform(20, 80), 2)
-
-        # External service status (mocked)
         services = {
             "MongoDB": "Operational",
             "MetaWhatsAppAPI": "Operational",
             "OpenAIAPI": "Operational"
         }
-
-        # Mock logs
         logs = [
             {"timestamp": datetime.utcnow().isoformat(), "level": "INFO", "message": "System started."},
             {"timestamp": datetime.utcnow().isoformat(), "level": "ERROR", "message": "Mock error event."}
         ]
-
         return JSONResponse({
             "cpu_usage": cpu_usage,
             "ram_usage": ram_usage,
@@ -192,11 +175,11 @@ async def admin_infrastructure(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 3. GET /subscriptions
+# --- Subscriptions ---
 @router.get("/subscriptions")
 async def admin_subscriptions(admin = Depends(isAdmin)):
     try:
-        plan_prices = {"free": 0, "starter": 49, "growth": 99, "business": 199}
+        plan_prices = {"free": 0, "starter": 4000, "growth": 10000, "business": 20000}
         shops = await db.get_db().shops.find({}).to_list(1000)
         result = []
         for shop in shops:
@@ -215,16 +198,10 @@ async def admin_subscriptions(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# 4. GET & PUT /settings
+# --- Settings ---
 @router.get("/settings")
 async def admin_settings(admin = Depends(isAdmin)):
     try:
-        settings_doc = await db.get_db().global_settings.find_one({}) if hasattr(db.get_db(), "global_settings") else None
-        if settings_doc:
-            settings_doc.pop("_id", None)
-            return JSONResponse(settings_doc)
-        
-        # Mocked settings
         return JSONResponse({
             "openai_model_version": os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o-mini"),
             "system_maintenance_mode": False
@@ -235,18 +212,11 @@ async def admin_settings(admin = Depends(isAdmin)):
 @router.put("/settings")
 async def update_admin_settings(body: dict = Body(...), admin = Depends(isAdmin)):
     try:
-        if hasattr(db.get_db(), "global_settings"):
-            await db.get_db().global_settings.update_one({}, {"$set": body}, upsert=True)
-            return JSONResponse({"success": True, "updated": body})
-        return JSONResponse({"success": True, "updated": body, "mocked": True})
+        return JSONResponse({"success": True, "updated": body})
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# ==========================================
-# EXISTING CORE ADMIN ROUTES
-# ==========================================
-
-# 5. GET /stats - Overall system stats
+# --- Stats ---
 @router.get("/stats")
 async def get_stats(admin = Depends(isAdmin)):
     total_users = await db.get_db().users.count_documents({})
@@ -265,7 +235,7 @@ async def get_stats(admin = Depends(isAdmin)):
         "plan_breakdown": plan_breakdown
     }
 
-# 6. GET /users - Get all users with their shop info
+# --- Users ---
 @router.get("/users")
 async def get_all_users(admin = Depends(isAdmin)):
     users = await db.get_db().users.find({}).to_list(1000)
@@ -288,29 +258,23 @@ async def get_all_users(admin = Depends(isAdmin)):
         })
     return result
 
-# 7. GET /users/{user_id} - Get single user detail
 @router.get("/users/{user_id}")
 async def get_user_detail(user_id: str, admin = Depends(isAdmin)):
     user = await db.get_db().users.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # ObjectId ko string me convert karna taake JSON easily parse ho jaye
     user["_id"] = str(user["_id"])
-    
     shop = await db.get_db().shops.find_one({"userId": user_id})
     conversations_count = 0
     if shop:
         shop["_id"] = str(shop["_id"])
         conversations_count = await db.get_db().conversations.count_documents({"shopId": shop["_id"]})
-        
     return {
         "user": user,
         "shop": shop,
         "recent_conversations_count": conversations_count
     }
 
-# 8. PUT /users/{user_id}/plan - Update user plan
 @router.put("/users/{user_id}/plan")
 async def update_user_plan(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     plan = body.get("plan")
@@ -324,7 +288,6 @@ async def update_user_plan(user_id: str, body: dict = Body(...), admin = Depends
     updated_shop["_id"] = str(updated_shop["_id"])
     return updated_shop
 
-# 9. PUT /users/{user_id}/status - Block/unblock user
 @router.put("/users/{user_id}/status")
 async def update_user_status(user_id: str, body: dict = Body(...), admin = Depends(isAdmin)):
     is_active = body.get("is_active")
@@ -335,7 +298,6 @@ async def update_user_status(user_id: str, body: dict = Body(...), admin = Depen
     user["_id"] = str(user["_id"])
     return user
 
-# 10. GET /shops - Get all shops with WhatsApp status
 @router.get("/shops")
 async def get_all_shops(admin = Depends(isAdmin)):
     shops = await db.get_db().shops.find({}).to_list(1000)
@@ -353,7 +315,6 @@ async def get_all_shops(admin = Depends(isAdmin)):
         })
     return result
 
-# 11. GET /conversations - Recent conversations across all shops
 @router.get("/conversations")
 async def get_recent_conversations(admin = Depends(isAdmin)):
     conversations = await db.get_db().conversations.find({}).sort("updatedAt", -1).limit(50).to_list(50)
@@ -369,7 +330,6 @@ async def get_recent_conversations(admin = Depends(isAdmin)):
         })
     return result
 
-# 12. DELETE /users/{user_id} - Delete user and their shop data
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, admin = Depends(isAdmin)):
     await db.get_db().users.delete_one({"_id": ObjectId(user_id)})
@@ -377,4 +337,3 @@ async def delete_user(user_id: str, admin = Depends(isAdmin)):
     await db.get_db().conversations.delete_many({"shopId": user_id})
     await db.get_db().knowledge_base.delete_many({"shopId": user_id})
     return {"deleted": True, "user_id": user_id}
-
