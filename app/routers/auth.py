@@ -333,12 +333,24 @@ async def change_password(
 # --- PROFILE ---
 @router.get("/profile")
 async def read_users_me(current_user: UserInDB = Depends(get_current_user)):
+    # Get shop plan
+    shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    plan = shop.get("plan", "free") if shop else "free"
+    messages_this_month = shop.get("messages_this_month", 0) if shop else 0
+    messages_limit = {
+        "free": 200,
+        "starter": 1000,
+        "growth": 5000,
+        "business": float('inf')
+    }.get(plan, 200)
     return {
         "phone": current_user.phone,
         "name": current_user.name,
         "email": current_user.email,
-        "plan": current_user.plan,
+        "plan": plan,
         "is_active": current_user.is_active,
         "phone_verified": current_user.phone_verified,
         "ai_active": current_user.ai_active,
+        "messages_this_month": messages_this_month,
+        "messages_limit": messages_limit
     }
