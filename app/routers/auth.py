@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from app.main import limiter
+from app.core.limiter import limiter
 from pydantic import BaseModel, EmailStr, validator, Field
 import logging
 import os
