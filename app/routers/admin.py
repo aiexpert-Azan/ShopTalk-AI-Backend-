@@ -1,24 +1,3 @@
-# --- Delete Single Upgrade Request (Admin) ---
-@router.delete("/upgrade-requests/{request_id}")
-async def delete_upgrade_request(
-    request_id: str,
-    admin = Depends(isAdmin)
-):
-    from bson import ObjectId
-    result = await db.get_db().upgrade_requests.delete_one({"_id": ObjectId(request_id)})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Request not found")
-    return {"deleted": True, "request_id": request_id}
-
-# --- Bulk Delete Approved/Rejected Upgrade Requests (Admin) ---
-@router.delete("/upgrade-requests")
-async def clear_completed_upgrade_requests(
-    admin = Depends(isAdmin)
-):
-    result = await db.get_db().upgrade_requests.delete_many({
-        "status": {"$in": ["approved", "rejected"]}
-    })
-    return {"deleted_count": result.deleted_count, "message": f"Cleared {result.deleted_count} completed requests"}
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
@@ -35,17 +14,16 @@ from app.models.user import UserInDB
 
 router = APIRouter()
 
-# --- Plan Upgrade Request Model ---
+# --- Models ---
 class PlanUpgradeRequest(BaseModel):
     requested_plan: str
     reason: Optional[str] = None
 
-# --- Admin Login Model ---
 class AdminLoginRequest(BaseModel):
     phone: str
     password: str
 
-# --- ADMIN LOGIN ENDPOINT ---
+# --- ADMIN LOGIN ---
 @router.post("/login")
 async def admin_login(request: AdminLoginRequest):
     user = await db.get_db().users.find_one({"phone": request.phone})
@@ -77,7 +55,7 @@ async def admin_login(request: AdminLoginRequest):
         }
     }
 
-# --- Request Plan Upgrade Endpoint ---
+# --- UPGRADE REQUESTS ---
 @router.post("/upgrade-request")
 async def request_plan_upgrade(
     request: PlanUpgradeRequest,
@@ -102,7 +80,6 @@ async def request_plan_upgrade(
     await db.get_db().upgrade_requests.insert_one(upgrade_request)
     return {"message": "Upgrade request submitted. Admin will review and activate your plan shortly."}
 
-# --- Get All Upgrade Requests (Admin) ---
 @router.get("/upgrade-requests")
 async def get_upgrade_requests(admin = Depends(isAdmin)):
     requests = await db.get_db().upgrade_requests.find({}).sort("created_at", -1).to_list(100)
@@ -112,12 +89,8 @@ async def get_upgrade_requests(admin = Depends(isAdmin)):
         result.append(req)
     return result
 
-# --- Approve Upgrade Request (Admin) ---
 @router.post("/upgrade-requests/{request_id}/approve")
-async def approve_upgrade_request(
-    request_id: str,
-    admin = Depends(isAdmin)
-):
+async def approve_upgrade_request(request_id: str, admin = Depends(isAdmin)):
     upgrade_req = await db.get_db().upgrade_requests.find_one({"_id": ObjectId(request_id)})
     if not upgrade_req:
         raise HTTPException(status_code=404, detail="Request not found")
@@ -131,19 +104,29 @@ async def approve_upgrade_request(
     )
     return {"message": f"Plan upgraded to {upgrade_req['requested_plan']} successfully"}
 
-# --- Reject Upgrade Request (Admin) ---
 @router.post("/upgrade-requests/{request_id}/reject")
-async def reject_upgrade_request(
-    request_id: str,
-    admin = Depends(isAdmin)
-):
+async def reject_upgrade_request(request_id: str, admin = Depends(isAdmin)):
     await db.get_db().upgrade_requests.update_one(
         {"_id": ObjectId(request_id)},
         {"$set": {"status": "rejected", "rejected_at": datetime.utcnow()}}
     )
     return {"message": "Request rejected"}
 
-# --- Analytics ---
+@router.delete("/upgrade-requests/{request_id}")
+async def delete_upgrade_request(request_id: str, admin = Depends(isAdmin)):
+    result = await db.get_db().upgrade_requests.delete_one({"_id": ObjectId(request_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return {"deleted": True, "request_id": request_id}
+
+@router.delete("/upgrade-requests")
+async def clear_completed_upgrade_requests(admin = Depends(isAdmin)):
+    result = await db.get_db().upgrade_requests.delete_many({
+        "status": {"$in": ["approved", "rejected"]}
+    })
+    return {"deleted_count": result.deleted_count, "message": f"Cleared {result.deleted_count} completed requests"}
+
+# --- ANALYTICS ---
 @router.get("/analytics")
 async def admin_analytics(admin = Depends(isAdmin)):
     try:
@@ -172,7 +155,7 @@ async def admin_analytics(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- Infrastructure ---
+# --- INFRASTRUCTURE ---
 @router.get("/infrastructure")
 async def admin_infrastructure(admin = Depends(isAdmin)):
     try:
@@ -196,7 +179,7 @@ async def admin_infrastructure(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- Subscriptions ---
+# --- SUBSCRIPTIONS ---
 @router.get("/subscriptions")
 async def admin_subscriptions(admin = Depends(isAdmin)):
     try:
@@ -219,7 +202,7 @@ async def admin_subscriptions(admin = Depends(isAdmin)):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- Settings ---
+# --- SETTINGS ---
 @router.get("/settings")
 async def admin_settings(admin = Depends(isAdmin)):
     try:
@@ -237,7 +220,7 @@ async def update_admin_settings(body: dict = Body(...), admin = Depends(isAdmin)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-# --- Stats ---
+# --- STATS ---
 @router.get("/stats")
 async def get_stats(admin = Depends(isAdmin)):
     total_users = await db.get_db().users.count_documents({})
@@ -256,7 +239,7 @@ async def get_stats(admin = Depends(isAdmin)):
         "plan_breakdown": plan_breakdown
     }
 
-# --- Users ---
+# --- USERS ---
 @router.get("/users")
 async def get_all_users(admin = Depends(isAdmin)):
     users = await db.get_db().users.find({}).to_list(1000)
