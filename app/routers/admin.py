@@ -1,3 +1,24 @@
+# --- Delete Single Upgrade Request (Admin) ---
+@router.delete("/upgrade-requests/{request_id}")
+async def delete_upgrade_request(
+    request_id: str,
+    admin = Depends(isAdmin)
+):
+    from bson import ObjectId
+    result = await db.get_db().upgrade_requests.delete_one({"_id": ObjectId(request_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Request not found")
+    return {"deleted": True, "request_id": request_id}
+
+# --- Bulk Delete Approved/Rejected Upgrade Requests (Admin) ---
+@router.delete("/upgrade-requests")
+async def clear_completed_upgrade_requests(
+    admin = Depends(isAdmin)
+):
+    result = await db.get_db().upgrade_requests.delete_many({
+        "status": {"$in": ["approved", "rejected"]}
+    })
+    return {"deleted_count": result.deleted_count, "message": f"Cleared {result.deleted_count} completed requests"}
 from fastapi import APIRouter, Depends, HTTPException, Body
 from fastapi.responses import JSONResponse
 from datetime import datetime, timedelta
