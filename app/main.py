@@ -31,9 +31,9 @@ required_env_vars = [
     "AZURE_OPENAI_API_VERSION",
     "AZURE_OPENAI_ENDPOINT",
     "AZURE_OPENAI_DEPLOYMENT_NAME",
-    "WHATSAPP_CLIENT_ID",
-    "WHATSAPP_CLIENT_SECRET",
-    "WHATSAPP_REDIRECT_URI"
+    "FACEBOOK_APP_ID",
+    "FACEBOOK_APP_SECRET",
+    "FACEBOOK_REDIRECT_URI"
 ]
 missing_vars = [var for var in required_env_vars if not getattr(settings, var, None)]
 if missing_vars:

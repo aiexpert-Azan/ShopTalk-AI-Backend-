@@ -65,10 +65,10 @@ async def embedded_signup(
         # Exchange code for short-lived access token
         token_url = f"https://graph.facebook.com/v18.0/oauth/access_token"
         token_params = {
-            "client_id": settings.WHATSAPP_CLIENT_ID,
-            "client_secret": settings.WHATSAPP_CLIENT_SECRET,
-            "redirect_uri": settings.WHATSAPP_REDIRECT_URI,
-            "code": code,
+            "client_id": settings.FACEBOOK_APP_ID,
+            "client_secret": settings.FACEBOOK_APP_SECRET,
+            "redirect_uri": settings.FACEBOOK_REDIRECT_URI,
+            "code": request.code,
             "grant_type": "authorization_code"
         }
         async with httpx.AsyncClient() as client:
@@ -81,8 +81,8 @@ async def embedded_signup(
         long_token_url = f"https://graph.facebook.com/v18.0/oauth/access_token"
         long_token_params = {
             "grant_type": "fb_exchange_token",
-            "client_id": settings.WHATSAPP_CLIENT_ID,
-            "client_secret": settings.WHATSAPP_CLIENT_SECRET,
+            "client_id": settings.FACEBOOK_APP_ID,
+            "client_secret": settings.FACEBOOK_APP_SECRET,
             "fb_exchange_token": access_token
         }
         async with httpx.AsyncClient() as client:
