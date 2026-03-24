@@ -11,6 +11,7 @@ from datetime import datetime
 from bson import ObjectId
 import logging
 import httpx
+import json
 from fastapi import Body
 
 # Plan message limits
@@ -38,6 +39,7 @@ class _DummyClient:
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
 async def reset_monthly_if_needed(shop):
     """Reset monthly counter if new month has started"""
     last_reset = shop.get("last_reset_date")
@@ -53,14 +55,93 @@ async def reset_monthly_if_needed(shop):
         shop["messages_this_month"] = 0
     return shop
 
+
 async def check_message_limit(shop) -> tuple[bool, int, int]:
     """Returns (can_send, used, limit)"""
     plan = shop.get("plan", "free")
-    limit = PLAN_LIMITS.get(plan, 100)
+    limit = PLAN_LIMITS.get(plan, 200)
     used = shop.get("messages_this_month", 0)
     if limit == float('inf'):
         return True, used, -1
     return used < limit, used, int(limit)
+
+
+async def detect_order_intent(ai_service, incoming_msg: str) -> dict:
+    """
+    Ask AI if message is an order or general chat.
+    Returns {"type": "order", "items": [...]} or {"type": "chat"}
+    """
+    detection_prompt = """You are an order detection system for a Pakistani shop's WhatsApp bot.
+
+Your ONLY job is to determine if a customer message is placing an ORDER or just chatting/asking a question.
+
+ORDER = Customer explicitly wants to BUY or PURCHASE items with quantity.
+Examples of ORDERS:
+- "2 milk chahiye"
+- "mujhe ek bread do"
+- "1 dozen eggs order karna hai"
+- "3 packets chips lene hain"
+- "bhai 2 doodh aur 1 bread"
+
+NOT an ORDER (general chat/questions):
+- "kya milk available hai?" (just asking)
+- "price kya hai?" (asking price)
+- "hello", "assalam o alaikum" (greeting)
+- "delivery kab hogi?" (asking about delivery)
+- "shop band hai kya?" (general question)
+- "shukriya", "ok", "theek hai" (acknowledgement)
+
+If it IS an order, respond ONLY with valid JSON:
+{"type": "order", "items": [{"name": "product name", "quantity": 2}], "delivery_method": "delivery"}
+
+If it is NOT an order, respond ONLY with valid JSON:
+{"type": "chat"}
+
+IMPORTANT: Respond with JSON only. No explanation. No extra text."""
+
+    try:
+        raw = await ai_service.generate_response(
+            shop_context=detection_prompt,
+            history=[],
+            user_message=incoming_msg
+        )
+        # Clean response — remove markdown code fences if AI added them
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+        result = json.loads(cleaned)
+        return result
+    except Exception as e:
+        logger.warning(f"Order detection failed, defaulting to chat: {e}")
+        return {"type": "chat"}
+
+
+async def enrich_order_items(items: list, shop_id: str) -> tuple[list, float]:
+    """Match items to products in DB and calculate total"""
+    enriched = []
+    total = 0.0
+
+    for item in items:
+        product = await db.get_db().products.find_one({
+            "shopId": shop_id,
+            "name": {"$regex": item.get("name", ""), "$options": "i"}
+        })
+        price = float(product["price"]) if product and "price" in product else 0.0
+        qty = int(item.get("quantity", 1))
+
+        enriched.append({
+            "name": item.get("name", "Unknown"),
+            "quantity": qty,
+            "price": price,
+            "productId": str(product["_id"]) if product else ""
+        })
+        total += price * qty
+
+    return enriched, total
+
 
 @router.post("/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -75,6 +156,7 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+
 
 @router.post("/_internal/mock-ai")
 async def set_mock_ai(enabled: bool = Body(True)):
@@ -92,6 +174,7 @@ async def set_mock_ai(enabled: bool = Body(True)):
         except Exception as e:
             return {"error": str(e)}
 
+
 @router.get("/conversations/{customer_id}", response_model=List[Message])
 async def get_conversation_history(
     customer_id: str,
@@ -108,6 +191,7 @@ async def get_conversation_history(
         return []
     return conversation.get("messages", [])
 
+
 @router.get("/webhook/whatsapp")
 async def whatsapp_webhook_verify(
     hub_mode: str = Query(None, alias="hub.mode"),
@@ -120,6 +204,7 @@ async def whatsapp_webhook_verify(
         return PlainTextResponse(content=hub_challenge, status_code=200)
     logger.warning("WhatsApp webhook verification failed")
     raise HTTPException(status_code=403, detail="Verification failed")
+
 
 @router.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
@@ -170,7 +255,7 @@ async def whatsapp_webhook(request: Request):
 
         logger.info(f"Received WhatsApp message from {sender_phone}: {incoming_msg}")
 
-        # Find shop by phone_number_id
+        # ── FIND SHOP ──
         shop = await db.get_db().shops.find_one({"whatsapp_phone_number_id": phone_number_id})
         if not shop:
             shop = await db.get_db().shops.find_one({})
@@ -189,11 +274,10 @@ async def whatsapp_webhook(request: Request):
             limit_msg = (
                 f"Aapki is maah ki {limit} messages ki limit khatam ho gayi hai. "
                 f"Behtar service ke liye apna plan upgrade karein. "
-                f"Abhi upgrade karein: https://v0-shopkeeper-ai-setup.vercel.app/billing"
+                f"Abhi upgrade karein: https://shoptalkai.app/billing"
             )
             logger.warning(f"Shop {shop.get('name')} exceeded {plan} plan limit ({used}/{limit})")
 
-            # Send limit exceeded message
             access_token = shop.get("whatsapp_access_token") or settings.WHATSAPP_ACCESS_TOKEN
             send_phone_id = shop.get("whatsapp_phone_number_id") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
 
@@ -217,7 +301,7 @@ async def whatsapp_webhook(request: Request):
             return {"status": "ok"}
         # ── END LIMIT CHECK ──
 
-        # Build shop context
+        # ── BUILD SHOP CONTEXT ──
         shop_name = shop.get("name", "Our Shop")
         shop_description = shop.get("description", "")
         shop_id = str(shop.get("_id", ""))
@@ -262,7 +346,7 @@ You help customers with:
 Always be polite, helpful and respond in the same language the customer uses.
 If customer writes in Urdu, respond in Urdu. If in English, respond in English."""
 
-        # Get conversation history
+        # ── GET CONVERSATION HISTORY ──
         conversation = await db.get_db().conversations.find_one({
             "customerPhone": sender_phone,
             "shopId": shop_id
@@ -271,18 +355,74 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
         })
         history = conversation.get("messages", []) if conversation else []
 
-        # Generate AI response
-        try:
-            response_text = await ai_service.generate_response(
-                shop_context=shop_context,
-                history=history,
-                user_message=incoming_msg
-            )
-        except Exception as e:
-            logger.error(f"AI error: {e}")
-            response_text = "Sorry, I'm having trouble right now. Please try again later."
+        # ── ORDER DETECTION ──
+        intent_data = await detect_order_intent(ai_service, incoming_msg)
+        logger.info(f"Intent detection result: {intent_data}")
 
-        # Save conversation
+        if intent_data.get("type") == "order":
+            # ── ORDER FLOW ──
+            items = intent_data.get("items", [])
+
+            if not items:
+                # AI said order but no items parsed — fall back to chat
+                response_text = await ai_service.generate_response(
+                    shop_context=shop_context,
+                    history=history,
+                    user_message=incoming_msg
+                )
+            else:
+                enriched_items, total = await enrich_order_items(items, shop_id)
+                delivery_fee = 200
+
+                # Save order to DB
+                order_doc = {
+                    "shopId": shop_id,
+                    "customerPhone": sender_phone,
+                    "customerName": sender_phone,
+                    "items": enriched_items,
+                    "totalAmount": round(total + delivery_fee, 2),
+                    "deliveryFee": delivery_fee,
+                    "status": "new",
+                    "deliveryMethod": intent_data.get("delivery_method", "delivery"),
+                    "paymentMethod": "COD",
+                    "createdAt": datetime.utcnow(),
+                    "updatedAt": datetime.utcnow(),
+                    "timeline": [{
+                        "action": "new",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "message": "Order placed via WhatsApp"
+                    }]
+                }
+                await db.get_db().orders.insert_one(order_doc)
+                logger.info(f"New order saved for {sender_phone} — Total: Rs.{total + delivery_fee}")
+
+                # Build confirmation message
+                items_text = "\n".join([
+                    f"• {i['quantity']}x {i['name']} — Rs.{int(i['price'] * i['quantity'])}"
+                    for i in enriched_items
+                ])
+                response_text = (
+                    f"✅ Aapka order receive ho gaya!\n\n"
+                    f"📦 *Order Details:*\n"
+                    f"{items_text}\n\n"
+                    f"🚚 Delivery Fee: Rs.{delivery_fee}\n"
+                    f"💰 *Total: Rs.{int(total + delivery_fee)}*\n\n"
+                    f"Hum jald hi aapko confirm karenge. Shukriya! 🙏"
+                )
+
+        else:
+            # ── NORMAL Q&A FLOW ──
+            try:
+                response_text = await ai_service.generate_response(
+                    shop_context=shop_context,
+                    history=history,
+                    user_message=incoming_msg
+                )
+            except Exception as e:
+                logger.error(f"AI error: {e}")
+                response_text = "Sorry, I'm having trouble right now. Please try again later."
+
+        # ── SAVE CONVERSATION ──
         new_messages = history + [
             {"role": "user", "content": incoming_msg},
             {"role": "assistant", "content": response_text}
@@ -298,14 +438,13 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
             upsert=True
         )
 
-        # ── INCREMENT COUNTER ──
+        # ── INCREMENT MESSAGE COUNTER ──
         await db.get_db().shops.update_one(
             {"_id": shop["_id"]},
             {"$inc": {"messages_this_month": 1}}
         )
-        # ── END INCREMENT ──
 
-        # Send WhatsApp reply
+        # ── SEND WHATSAPP REPLY ──
         access_token = shop.get("whatsapp_access_token") or settings.WHATSAPP_ACCESS_TOKEN
         send_phone_id = shop.get("whatsapp_phone_number_id") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
 
