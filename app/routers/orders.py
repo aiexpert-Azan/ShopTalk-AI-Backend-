@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from app.core.deps import get_current_user
@@ -23,20 +23,27 @@ async def get_order_stats(
 
     shop_id = str(shop["_id"])
     today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-
-    new_count = await db.get_db().orders.count_documents({"shopId": shop_id, "status": "new"})
-    processing_count = await db.get_db().orders.count_documents({"shopId": shop_id, "status": "processing"})
-    completed_count = await db.get_db().orders.count_documents({"shopId": shop_id, "status": "completed"})
-    today_count = await db.get_db().orders.count_documents({
-        "shopId": shop_id,
-        "createdAt": {"$gte": today}
-    })
-
+    pipeline = [
+        {"$match": {"shopId": shop_id}},
+        {"$facet": {
+            "new": [{"$match": {"status": "new"}}, {"$count": "count"}],
+            "processing": [{"$match": {"status": "processing"}}, {"$count": "count"}],
+            "completed": [{"$match": {"status": "completed"}}, {"$count": "count"}],
+            "today": [{"$match": {"createdAt": {"$gte": today}}}, {"$count": "count"}]
+        }}
+    ]
+    agg = await db.get_db().orders.aggregate(pipeline).to_list(1)
+    if not agg:
+        return {"new": 0, "processing": 0, "completed": 0, "today": 0}
+    facet = agg[0]
+    def get_count(key):
+        arr = facet.get(key, [])
+        return arr[0]["count"] if arr else 0
     return {
-        "new": new_count,
-        "processing": processing_count,
-        "completed": completed_count,
-        "today": today_count
+        "new": get_count("new"),
+        "processing": get_count("processing"),
+        "completed": get_count("completed"),
+        "today": get_count("today")
     }
 
 
@@ -129,6 +136,36 @@ async def update_order_status(
             "$push": {"timeline": timeline_entry.model_dump()}
         }
     )
+
+    # --- WhatsApp Notification ---
+    whatsapp_token = shop.get("whatsapp_access_token")
+    whatsapp_phone_id = shop.get("whatsapp_phone_number_id")
+    customer_phone = order.get("customerPhone")
+    order_number = order.get("orderNumber") or str(order.get("_id"))
+    polite_status = status_update.status.capitalize()
+    msg_body = f"Aapka order #{order_number} ab {polite_status} mein hai. Shukriya!"
+    if whatsapp_token and whatsapp_phone_id and customer_phone:
+        whatsapp_url = f"https://graph.facebook.com/v19.0/{whatsapp_phone_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {whatsapp_token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": customer_phone,
+            "type": "text",
+            "text": {"body": msg_body}
+        }
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(whatsapp_url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                logger.info(f"WhatsApp notification sent to {customer_phone} for order {order_number} status {status_update.status}")
+            else:
+                logger.error(f"Failed to send WhatsApp notification: {resp.status_code} {resp.text}", extra={"shop_id": shop.get('_id'), "user_id": current_user.id})
+        except Exception as e:
+            logger.error(f"WhatsApp notification error: {e}", extra={"shop_id": shop.get('_id'), "user_id": current_user.id})
 
     updated_order = await db.get_db().orders.find_one({"_id": ObjectId(order_id)})
     updated_order["_id"] = str(updated_order["_id"])

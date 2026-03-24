@@ -10,8 +10,8 @@ from app.services.ai_service import ai_service
 from datetime import datetime
 from bson import ObjectId
 import logging
-import httpx
 import json
+import httpx
 from fastapi import Body
 
 # Plan message limits
@@ -143,7 +143,7 @@ async def enrich_order_items(items: list, shop_id: str) -> tuple[list, float]:
     return enriched, total
 
 
-@router.post("/chat")
+@router.post("/chat", response_model=dict)
 async def chat_endpoint(request: ChatRequest):
     shop_context = "You are a helpful assistant for a general store."
     try:
@@ -154,7 +154,9 @@ async def chat_endpoint(request: ChatRequest):
         )
         return {"response": response_text, "shouldEscalate": False}
     except Exception as e:
-        logger.error(f"Chat endpoint error: {e}", exc_info=True)
+        shop_id = getattr(request, 'shop_id', None)
+        user_id = getattr(request, 'user_id', None)
+        logger.error(f"Chat endpoint error: {e}", exc_info=True, extra={"shop_id": shop_id, "user_id": user_id})
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
 
 
@@ -258,11 +260,7 @@ async def whatsapp_webhook(request: Request):
         # ── FIND SHOP ──
         shop = await db.get_db().shops.find_one({"whatsapp_phone_number_id": phone_number_id})
         if not shop:
-            shop = await db.get_db().shops.find_one({})
-            logger.warning(f"No shop found for phone_number_id {phone_number_id}, using fallback")
-
-        if not shop:
-            logger.error("No shop found at all")
+            logger.critical(f"Data isolation: No shop found for phone_number_id {phone_number_id}. Message ignored.")
             return {"status": "ok"}
 
         # ── MESSAGE LIMIT CHECK ──

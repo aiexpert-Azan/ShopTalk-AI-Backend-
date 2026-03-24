@@ -1,6 +1,8 @@
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+import logging
+import sys
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import db
@@ -21,6 +23,22 @@ async def lifespan(app: FastAPI):
         db.close()
     except Exception:
         pass
+
+
+# Environment variable check at startup
+required_env_vars = [
+    "AZURE_OPENAI_API_KEY",
+    "AZURE_OPENAI_API_VERSION",
+    "AZURE_OPENAI_ENDPOINT",
+    "AZURE_OPENAI_DEPLOYMENT_NAME",
+    "WHATSAPP_CLIENT_ID",
+    "WHATSAPP_CLIENT_SECRET",
+    "WHATSAPP_REDIRECT_URI"
+]
+missing_vars = [var for var in required_env_vars if not getattr(settings, var, None)]
+if missing_vars:
+    logging.error(f"Missing required environment variables: {missing_vars}")
+    sys.exit(1)
 
 app = FastAPI(
     title=settings.APP_NAME,

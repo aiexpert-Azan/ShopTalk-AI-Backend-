@@ -21,8 +21,7 @@ import firebase_admin
 from firebase_admin import credentials as firebase_credentials, auth as firebase_auth
 from pathlib import Path
 
-# In-memory reset codes storage
-reset_codes: dict = {}
+
 
 # --- Pydantic Models ---
 
@@ -238,8 +237,13 @@ async def forgot_password(request: Request, request_data: ForgotPasswordRequest)
     if not user:
         raise HTTPException(status_code=404, detail="No account found with this phone number.")
     code = str(random.randint(100000, 999999))
-    expiry = datetime.utcnow() + timedelta(minutes=10)
-    reset_codes[phone] = {"code": code, "expiry": expiry}
+    # Remove any existing OTP for this phone
+    await db.get_db().otp_codes.delete_many({"phone": phone})
+    await db.get_db().otp_codes.insert_one({
+        "phone": phone,
+        "code": code,
+        "createdAt": datetime.utcnow()
+    })
     logger.info(f"Password reset OTP for {phone}: {code}")
     return ResetOTPResponse(message="OTP sent. Use 123456 for testing.", phone=phone)
     phone = request.phone
@@ -257,13 +261,15 @@ async def forgot_password(request: Request, request_data: ForgotPasswordRequest)
 # --- VERIFY RESET OTP ---
 @router.post("/verify-reset-otp")
 async def verify_reset_otp(request: VerifyResetOTPRequest):
-    stored = reset_codes.get(request.phone)
-    if not stored or datetime.utcnow() > stored["expiry"]:
+    otp_doc = await db.get_db().otp_codes.find_one({"phone": request.phone})
+    if not otp_doc:
         raise HTTPException(status_code=400, detail="OTP expired or not found")
-    
-    if request.code != "123456" and request.code != stored["code"]:
+    # Check expiry (TTL index will auto-delete, but double-check)
+    if (datetime.utcnow() - otp_doc["createdAt"]).total_seconds() > 600:
+        await db.get_db().otp_codes.delete_one({"_id": otp_doc["_id"]})
+        raise HTTPException(status_code=400, detail="OTP expired or not found")
+    if request.code != "123456" and request.code != otp_doc["code"]:
         raise HTTPException(status_code=400, detail="Invalid OTP code")
-        
     return {"message": "OTP verified successfully", "phone": request.phone}
 
 # --- RESET PASSWORD ---
@@ -271,7 +277,6 @@ async def verify_reset_otp(request: VerifyResetOTPRequest):
 # --- RESET PASSWORD (with +92/0 normalization) ---
 @router.post("/reset-password")
 async def reset_password(request: ResetPasswordRequest):
-    stored = reset_codes.get(request.phone)
     # Normalize phone for lookup
     phone_variants = [request.phone]
     if request.phone.startswith("+92"):
@@ -279,11 +284,13 @@ async def reset_password(request: ResetPasswordRequest):
     elif request.phone.startswith("0"):
         phone_variants.append("+92" + request.phone[1:])
 
-    if not stored or datetime.utcnow() > stored["expiry"]:
-        if request.code != "123456":
-            raise HTTPException(status_code=400, detail="OTP expired or not found")
-
-    if request.code != "123456" and request.code != stored.get("code"):
+    otp_doc = await db.get_db().otp_codes.find_one({"phone": request.phone})
+    if not otp_doc:
+        raise HTTPException(status_code=400, detail="OTP expired or not found")
+    if (datetime.utcnow() - otp_doc["createdAt"]).total_seconds() > 600:
+        await db.get_db().otp_codes.delete_one({"_id": otp_doc["_id"]})
+        raise HTTPException(status_code=400, detail="OTP expired or not found")
+    if request.code != "123456" and request.code != otp_doc["code"]:
         raise HTTPException(status_code=400, detail="Invalid OTP code")
 
     user = await db.get_db().users.find_one({"phone": {"$in": phone_variants}})
@@ -295,8 +302,7 @@ async def reset_password(request: ResetPasswordRequest):
         {"_id": user["_id"]},
         {"$set": {"hashed_password": hashed}}
     )
-    if request.phone in reset_codes:
-        del reset_codes[request.phone]
+    await db.get_db().otp_codes.delete_one({"_id": otp_doc["_id"]})
     return {"message": "Password reset successfully"}
 
 # --- CHANGE PASSWORD (authenticated) ---
