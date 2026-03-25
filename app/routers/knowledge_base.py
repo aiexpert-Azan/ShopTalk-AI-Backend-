@@ -318,15 +318,49 @@ async def scrape_website(
     except Exception as e:
         logger.error(f"Error scraping homepage: {e}")
         raise HTTPException(status_code=400, detail="Could not access homepage of website")
-    # Parse homepage HTML and extract text
+    # Parse homepage HTML and improved text extraction
     soup = BeautifulSoup(homepage_html, "html.parser")
-    for tag in soup(["script", "style"]):
+    for tag in soup(["script", "style", "noscript", "iframe", "svg", "path"]):
         tag.decompose()
-    clean_text = soup.get_text(separator=" ", strip=True)
-    logger.info(f"Extracted text length: {len(clean_text)}")
-    logger.info(f"First 300 chars of text: {clean_text[:300]}")
-    if len(clean_text) < 200:
-        raise HTTPException(status_code=400, detail="Could not extract content from website")
+
+    important_text = []
+    # Headings
+    for tag in soup.find_all(["h1", "h2", "h3", "h4"]):
+        t = tag.get_text(strip=True)
+        if t:
+            important_text.append(t)
+    # Paragraphs
+    for tag in soup.find_all("p"):
+        t = tag.get_text(strip=True)
+        if t:
+            important_text.append(t)
+    # List items
+    for tag in soup.find_all("li"):
+        t = tag.get_text(strip=True)
+        if t:
+            important_text.append(t)
+    # Table cells
+    for tag in soup.find_all(["td", "th"]):
+        t = tag.get_text(strip=True)
+        if t:
+            important_text.append(t)
+    # Divs with short text (menu items, prices)
+    for tag in soup.find_all("div"):
+        t = tag.get_text(strip=True)
+        if t and len(t) < 200:
+            important_text.append(t)
+    # Combine and deduplicate
+    seen = set()
+    unique_text = []
+    for t in important_text:
+        if t not in seen:
+            seen.add(t)
+            unique_text.append(t)
+    clean_text = "\n".join(unique_text)
+    logger.info(f"Extracted {len(clean_text)} chars from {url}")
+    logger.info(f"Preview: {clean_text[:300]}")
+    if not clean_text or len(clean_text.strip()) < 50:
+        raise HTTPException(status_code=400, detail="Could not extract content")
     scraped_content = clean_text
     # --- Find internal links for further scraping (optional, can keep or remove) ---
     links = soup.find_all("a", href=True)
