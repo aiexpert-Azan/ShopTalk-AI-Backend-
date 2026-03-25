@@ -282,13 +282,34 @@ async def scrape_website(
     shop_id = str(shop["_id"])
     from urllib.parse import urljoin, urlparse
     scraped_content = ""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    # Advanced headers for anti-bot bypass
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Cache-Control": "max-age=0",
+    }
+    session = requests.Session()
+    session.headers.update(headers)
     # --- Scrape homepage (REQUIRED) ---
+    homepage_html = ""
     try:
         logger.info(f"Scraping homepage: {url}")
-        resp = requests.get(url, headers=headers, timeout=30)
-        if resp.status_code != 200:
-            logger.error(f"Homepage failed with status {resp.status_code}")
+        resp = session.get(url, timeout=30)
+        # Fallback User-Agent if blocked
+        if resp.status_code in (403, 429) or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
+            logger.warning(f"Blocked on homepage, trying fallback User-Agent")
+            fallback_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
+            session.headers.update({"User-Agent": fallback_ua})
+            resp = session.get(url, timeout=30)
+        if resp.status_code != 200 or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
+            logger.error(f"Homepage failed with status {resp.status_code} or Cloudflare block")
             raise HTTPException(status_code=400, detail="Could not access homepage of website")
         homepage_html = resp.text
         soup = BeautifulSoup(homepage_html, "html.parser")
@@ -297,22 +318,17 @@ async def scrape_website(
             tag.decompose()
         # Extract text from important elements
         text_parts = []
-        # Headings
         for h in soup.find_all(["h1", "h2", "h3"]):
             text_parts.append(h.get_text(separator=" ", strip=True))
-        # Paragraphs
         for p in soup.find_all("p"):
             text_parts.append(p.get_text(separator=" ", strip=True))
-        # List items
         for li in soup.find_all("li"):
             text_parts.append(li.get_text(separator=" ", strip=True))
-        # Tables
         for table in soup.find_all("table"):
             for row in table.find_all("tr"):
                 row_text = " | ".join(cell.get_text(separator=" ", strip=True) for cell in row.find_all(["td", "th"]))
                 if row_text:
                     text_parts.append(row_text)
-        # Fallback: all text
         text_parts.append(soup.get_text(separator=" ", strip=True))
         scraped_content += "\n".join(text_parts)
         # --- Find internal links for further scraping ---
@@ -333,9 +349,15 @@ async def scrape_website(
     for link in internal_links[:5]:
         try:
             logger.info(f"Scraping internal link: {link}")
-            resp = requests.get(link, headers=headers, timeout=30)
-            if resp.status_code != 200:
-                logger.warning(f"Skipping {link}: status {resp.status_code}")
+            resp = session.get(link, timeout=30)
+            # Fallback User-Agent if blocked
+            if resp.status_code in (403, 429) or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
+                logger.warning(f"Blocked on {link}, trying fallback User-Agent")
+                fallback_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
+                session.headers.update({"User-Agent": fallback_ua})
+                resp = session.get(link, timeout=30)
+            if resp.status_code != 200 or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
+                logger.warning(f"Skipping {link}: status {resp.status_code} or Cloudflare block")
                 continue
             soup = BeautifulSoup(resp.text, "html.parser")
             for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -359,8 +381,9 @@ async def scrape_website(
             continue
         time.sleep(0.5)
     scraped_content = scraped_content.strip()
-    if len(scraped_content) < 500:
-        raise HTTPException(status_code=400, detail="Could not extract enough content from website")
+    # If content is empty, error. If < 300 chars, still try to generate Q&A.
+    if not scraped_content:
+        raise HTTPException(status_code=400, detail="Could not extract any content from website")
     # Call Azure OpenAI
     system_prompt = """
 You are helping build a WhatsApp chatbot for a Pakistani business.
