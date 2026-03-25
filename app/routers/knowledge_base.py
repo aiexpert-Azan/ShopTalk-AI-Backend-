@@ -313,13 +313,14 @@ async def scrape_website(
         "Write questions in Pakistani style (Urdu/English mix).\n"
         "Examples: 'Price kya hai?', 'Delivery charges kitne hain?'\n\n"
         "For each Q&A also detect its category from:\n[General, Products, Delivery, Returns, Timing, Billing, Location, Reservations]\n\n"
-        "Return ONLY valid JSON array:\n[
+        "Return ONLY valid JSON array:\n"
+   [
   {
     'question': '...',
     'answer': '...',
     'category': '...'
   }
-]")
+])"
     try:
         response = await ai_service.client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
