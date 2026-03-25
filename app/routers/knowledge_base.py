@@ -281,6 +281,7 @@ async def scrape_website(
     from urllib.parse import urljoin, urlparse
     scraped_content = ""
     base_url = url
+    logger.info(f"Scraping URL: {base_url}")
     session = requests.Session()
     headers1 = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -290,8 +291,10 @@ async def scrape_website(
     session.headers.update(headers1)
     homepage_html = ""
     try:
-        logger.info(f"Scraping homepage: {base_url}")
         response = session.get(base_url, timeout=30)
+        logger.info(f"Homepage status: {response.status_code}")
+        logger.info(f"Response length: {len(response.text)}")
+        logger.info(f"First 500 chars: {response.text[:500]}")
         if response.status_code == 200:
             homepage_html = response.text
         elif response.status_code in [403, 429]:
@@ -299,6 +302,9 @@ async def scrape_website(
                 "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
             })
             response = session.get(base_url, timeout=30)
+            logger.info(f"Homepage status (fallback UA): {response.status_code}")
+            logger.info(f"Response length (fallback UA): {len(response.text)}")
+            logger.info(f"First 500 chars (fallback UA): {response.text[:500]}")
             if response.status_code == 200:
                 homepage_html = response.text
             else:
@@ -316,10 +322,12 @@ async def scrape_website(
     soup = BeautifulSoup(homepage_html, "html.parser")
     for tag in soup(["script", "style"]):
         tag.decompose()
-    text = soup.get_text(separator=" ", strip=True)
-    if len(text) < 200:
+    clean_text = soup.get_text(separator=" ", strip=True)
+    logger.info(f"Extracted text length: {len(clean_text)}")
+    logger.info(f"First 300 chars of text: {clean_text[:300]}")
+    if len(clean_text) < 200:
         raise HTTPException(status_code=400, detail="Could not extract content from website")
-    scraped_content = text
+    scraped_content = clean_text
     # --- Find internal links for further scraping (optional, can keep or remove) ---
     links = soup.find_all("a", href=True)
     internal_links = []
@@ -331,6 +339,7 @@ async def scrape_website(
                 internal_links.append(full_url)
     # (Optional: scrape internal links as before, or skip for simplicity)
     # --- AI Extraction ---
+    logger.info(f"Sending to OpenAI, content length: {len(scraped_content)}")
     system_prompt = """
 You are helping build a WhatsApp chatbot for a Pakistani business.
 You must respond with ONLY a valid JSON array. No explanations. No markdown. No code fences. Start your response with [ and end with ]
@@ -374,19 +383,20 @@ Return ONLY valid JSON array:
             temperature=0.2,
             max_tokens=2000
         )
-        raw = response.choices[0].message.content.strip()
+        raw_response = response.choices[0].message.content.strip()
+        logger.info(f"OpenAI raw response: {raw_response[:500]}")
         # Remove markdown code fences and extract only the JSON array
-        if "```" in raw:
-            raw = raw.split("```", 1)[-1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        if "```" in raw_response:
+            raw_response = raw_response.split("```", 1)[-1]
+            if raw_response.startswith("json"):
+                raw_response = raw_response[4:]
         # Extract only the JSON array
-        start = raw.find("[")
-        end = raw.rfind("]") + 1
+        start = raw_response.find("[")
+        end = raw_response.rfind("]") + 1
         if start == -1 or end == 0:
             raise ValueError("No JSON array found in response")
-        raw = raw[start:end]
-        qa_pairs = json.loads(raw)
+        raw_response = raw_response[start:end]
+        qa_pairs = json.loads(raw_response)
     except json.JSONDecodeError:
         logger.error("AI returned invalid JSON for website scraping.")
         raise HTTPException(status_code=500, detail="AI returned invalid JSON.")
