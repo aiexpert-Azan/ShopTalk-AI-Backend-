@@ -304,23 +304,38 @@ async def scrape_website(
     if len(scraped_content) < 100:
         raise HTTPException(status_code=400, detail="Could not extract content from website")
     # Call Azure OpenAI
-    system_prompt = (
-        "You are helping build a WhatsApp chatbot for a Pakistani business."
-    )
-    user_prompt = (
-        "Extract all useful information from this business website and generate 25-35 Question & Answer pairs.\n\n"
-        "Focus on:\n- Prices, charges, fees\n- Menu items / products / services\n- Timing and hours\n- Location and directions\n- Reservation / booking process\n- Delivery information\n- Contact details\n- Special offers or packages\n- FAQs\n\n"
-        "Write questions in Pakistani style (Urdu/English mix).\n"
-        "Examples: 'Price kya hai?', 'Delivery charges kitne hain?'\n\n"
-        "For each Q&A also detect its category from:\n[General, Products, Delivery, Returns, Timing, Billing, Location, Reservations]\n\n"
-        "Return ONLY valid JSON array:\n"
-   [
-  {
-    'question': '...',
-    'answer': '...',
-    'category': '...'
-  }
-])"
+        system_prompt = """
+You are helping build a WhatsApp chatbot for a Pakistani business.
+"""
+        user_prompt = """
+Extract all useful information from this business website and generate 25-35 Question & Answer pairs.
+
+Focus on:
+- Prices, charges, fees
+- Menu items / products / services
+- Timing and hours
+- Location and directions
+- Reservation / booking process
+- Delivery information
+- Contact details
+- Special offers or packages
+- FAQs
+
+Write questions in Pakistani style (Urdu/English mix).
+Examples: 'Price kya hai?', 'Delivery charges kitne hain?'
+
+For each Q&A also detect its category from:
+[General, Products, Delivery, Returns, Timing, Billing, Location, Reservations]
+
+Return ONLY valid JSON array:
+[
+    {
+        "question": "...",
+        "answer": "...",
+        "category": "..."
+    }
+]
+"""
     try:
         response = await ai_service.client.chat.completions.create(
             model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
