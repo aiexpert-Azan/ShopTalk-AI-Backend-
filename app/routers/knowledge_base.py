@@ -306,6 +306,7 @@ async def scrape_website(
     # Call Azure OpenAI
     system_prompt = """
 You are helping build a WhatsApp chatbot for a Pakistani business.
+You must respond with ONLY a valid JSON array. No explanations. No markdown. No code fences. Start your response with [ and end with ]
 """
     user_prompt = """
 Extract all useful information from this business website and generate 25-35 Question & Answer pairs.
@@ -346,13 +347,19 @@ Return ONLY valid JSON array:
             temperature=0.2,
             max_tokens=2000
         )
-        answer = response.choices[0].message.content.strip()
-        if answer.startswith("```"):
-            answer = answer.split("```")[1]
-            if answer.startswith("json"):
-                answer = answer[4:]
-        answer = answer.strip()
-        qa_pairs = json.loads(answer.replace("'", '"'))
+        raw = response.choices[0].message.content.strip()
+        # Remove markdown code fences and extract only the JSON array
+        if "```" in raw:
+            raw = raw.split("```", 1)[-1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        # Extract only the JSON array
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start == -1 or end == 0:
+            raise ValueError("No JSON array found in response")
+        raw = raw[start:end]
+        qa_pairs = json.loads(raw)
     except json.JSONDecodeError:
         logger.error("AI returned invalid JSON for website scraping.")
         raise HTTPException(status_code=500, detail="AI returned invalid JSON.")
