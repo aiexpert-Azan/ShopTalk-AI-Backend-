@@ -71,48 +71,38 @@ async def detect_order_intent(ai_service, incoming_msg: str) -> dict:
     Ask AI if message is an order or general chat.
     Returns {"type": "order", "items": [...]} or {"type": "chat"}
     """
-    detection_prompt = """You are an order detection system for a Pakistani shop's WhatsApp bot.
-
-Your ONLY job is to determine if a customer message is placing an ORDER or just chatting/asking a question.
-
-ORDER = Customer explicitly wants to BUY or PURCHASE items with quantity.
-Examples of ORDERS:
-- "2 milk chahiye"
-- "mujhe ek bread do"
-- "1 dozen eggs order karna hai"
-- "3 packets chips lene hain"
-- "bhai 2 doodh aur 1 bread"
-
-NOT an ORDER (general chat/questions):
-- "kya milk available hai?" (just asking)
-- "price kya hai?" (asking price)
-- "hello", "assalam o alaikum" (greeting)
-- "delivery kab hogi?" (asking about delivery)
-- "shop band hai kya?" (general question)
-- "shukriya", "ok", "theek hai" (acknowledgement)
-
-If it IS an order, respond ONLY with valid JSON:
-{"type": "order", "items": [{"name": "product name", "quantity": 2}], "delivery_method": "delivery"}
-
-If it is NOT an order, respond ONLY with valid JSON:
-{"type": "chat"}
-
-IMPORTANT: Respond with JSON only. No explanation. No extra text."""
-
+    detection_prompt = """
+An ORDER means customer wants to BUY something.
+If ORDER detected, return ONLY this JSON:
+{
+  'type': 'order',
+  'items': [
+    {
+      'name': 'exact product name customer said',
+      'quantity': 2,
+      'variation': 'size/color/variant if mentioned',
+      'special_instructions': 'any special notes'
+    }
+  ],
+  'delivery_method': 'delivery or pickup',
+  'special_note': 'any overall order note'
+}
+If NOT an order: {'type': 'chat'}
+IMPORTANT: Respond with JSON only. No explanation. No extra text.
+"""
     try:
         raw = await ai_service.generate_response(
             shop_context=detection_prompt,
             history=[],
             user_message=incoming_msg
         )
-        # Clean response — remove markdown code fences if AI added them
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             cleaned = cleaned.split("```")[1]
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         cleaned = cleaned.strip()
-        result = json.loads(cleaned)
+        result = json.loads(cleaned.replace("'", '"'))
         return result
     except Exception as e:
         logger.warning(f"Order detection failed, defaulting to chat: {e}")
@@ -123,7 +113,6 @@ async def enrich_order_items(items: list, shop_id: str) -> tuple[list, float]:
     """Match items to products in DB and calculate total"""
     enriched = []
     total = 0.0
-
     for item in items:
         product = await db.get_db().products.find_one({
             "shopId": shop_id,
@@ -131,15 +120,16 @@ async def enrich_order_items(items: list, shop_id: str) -> tuple[list, float]:
         })
         price = float(product["price"]) if product and "price" in product else 0.0
         qty = int(item.get("quantity", 1))
-
         enriched.append({
             "name": item.get("name", "Unknown"),
             "quantity": qty,
+            "variation": item.get("variation", ""),
+            "special_instructions": item.get("special_instructions", ""),
             "price": price,
-            "productId": str(product["_id"]) if product else ""
+            "productId": str(product["_id"]) if product else "",
+            "unit": product.get("unit", "piece") if product else "piece"
         })
         total += price * qty
-
     return enriched, total
 
 
@@ -360,7 +350,7 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
         if intent_data.get("type") == "order":
             # ── ORDER FLOW ──
             items = intent_data.get("items", [])
-
+            special_note = intent_data.get("special_note", "")
             if not items:
                 # AI said order but no items parsed — fall back to chat
                 response_text = await ai_service.generate_response(
@@ -371,7 +361,6 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
             else:
                 enriched_items, total = await enrich_order_items(items, shop_id)
                 delivery_fee = 200
-
                 # Save order to DB
                 order_doc = {
                     "shopId": shop_id,
@@ -389,23 +378,25 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
                         "action": "new",
                         "timestamp": datetime.utcnow().isoformat(),
                         "message": "Order placed via WhatsApp"
-                    }]
+                    }],
+                    "specialNote": special_note
                 }
                 await db.get_db().orders.insert_one(order_doc)
                 logger.info(f"New order saved for {sender_phone} — Total: Rs.{total + delivery_fee}")
-
                 # Build confirmation message
                 items_text = "\n".join([
-                    f"• {i['quantity']}x {i['name']} — Rs.{int(i['price'] * i['quantity'])}"
+                    f"- {i['quantity']}x {i['name']}" + (f" ({i['variation']})" if i.get('variation') else "") + f" — Rs.{int(i['price'] * i['quantity'])}"
+                    + (f"\n  Note: {i['special_instructions']}" if i.get('special_instructions') else "")
                     for i in enriched_items
                 ])
                 response_text = (
                     f"✅ Aapka order receive ho gaya!\n\n"
-                    f"📦 *Order Details:*\n"
+                    f"📦 Order Details:\n"
                     f"{items_text}\n\n"
+                    f"📝 Note: {special_note}\n"
                     f"🚚 Delivery Fee: Rs.{delivery_fee}\n"
-                    f"💰 *Total: Rs.{int(total + delivery_fee)}*\n\n"
-                    f"Hum jald hi aapko confirm karenge. Shukriya! 🙏"
+                    f"💰 Total: Rs.{int(total + delivery_fee)}\n\n"
+                    f"Hum jald confirm karenge. Shukriya! 🙏"
                 )
 
         else:

@@ -1,7 +1,13 @@
+
 from fastapi import APIRouter, Depends, HTTPException, status, Body, UploadFile, File
 from pypdf import PdfReader
 import json
 import io
+import logging
+import re
+import time
+import requests
+from bs4 import BeautifulSoup
 from app.core.database import db
 from app.core.deps import get_current_user
 from app.models.user import UserInDB
@@ -12,6 +18,26 @@ from datetime import datetime
 from bson import ObjectId
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+# === Helper: Category Detection ===
+def detect_category(question: str, answer: str) -> str:
+    text = f"{question} {answer}".lower()
+    if any(k in text for k in ["price", "cost", "fee", "charges", "rate", "kitna", "payment"]):
+        return "Billing"
+    if any(k in text for k in ["deliver", "shipping", "courier", "send", "bhejo"]):
+        return "Delivery"
+    if any(k in text for k in ["return", "refund", "exchange", "wapas", "cancel"]):
+        return "Returns"
+    if any(k in text for k in ["time", "hour", "open", "close", "timing", "schedule", "waqt"]):
+        return "Timing"
+    if any(k in text for k in ["product", "item", "available", "stock", "menu", "dish"]):
+        return "Products"
+    if any(k in text for k in ["location", "address", "where", "kahan", "direction"]):
+        return "Location"
+    if any(k in text for k in ["book", "reserve", "reservation", "table"]):
+        return "Reservations"
+    return "General"
 
 @router.post("/import-pdf")
 async def import_knowledge_base_pdf(
@@ -134,6 +160,8 @@ async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user))
     return [qa_to_dict(qa) for qa in qa_pairs]
 
 
+
+# === CHANGE 1: Prevent Duplicate Questions (Upsert) ===
 @router.post("/", response_model=dict)
 async def add_qa_pair(
     body: dict = Body(...),
@@ -146,17 +174,216 @@ async def add_qa_pair(
         shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
     if not shop:
         raise HTTPException(status_code=404, detail="Shop not found")
+    shop_id = str(shop["_id"])
+    question = body.get("question")
+    answer = body.get("answer")
+    category = body.get("category", "General")
+    if not question or not answer:
+        raise HTTPException(status_code=400, detail="Question and answer required.")
+    # Auto-detect category if missing or General
+    if not category or category == "General":
+        category = detect_category(question, answer)
+    # Check for duplicate (case-insensitive exact match)
+    existing = await db.get_db().knowledge_base.find_one({
+        "shopId": shop_id,
+        "question": {"$regex": f"^{re.escape(question)}$", "$options": "i"}
+    })
+    if existing:
+        # Update answer/category
+        await db.get_db().knowledge_base.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {"answer": answer, "category": category, "updated_at": datetime.utcnow()}}
+        )
+        return {"message": "Q&A updated (duplicate prevented)", "id": str(existing["_id"])}
+    # Insert new
     qa_doc = {
-        "shopId": str(shop["_id"]),
-        "question": body.get("question"),
-        "answer": body.get("answer"),
-        "category": body.get("category", "General"),
+        "shopId": shop_id,
+        "question": question,
+        "answer": answer,
+        "category": category,
         "is_active": True,
         "created_at": datetime.utcnow()
     }
     result = await db.get_db().knowledge_base.insert_one(qa_doc)
     qa_doc["_id"] = result.inserted_id
     return qa_to_dict(qa_doc)
+
+
+# === CHANGE 1: Bulk Upsert Endpoint ===
+@router.post("/bulk-upsert", response_model=dict)
+async def bulk_upsert_qa_pairs(
+    body: List[dict] = Body(...),
+    current_user: UserInDB = Depends(get_current_user)
+):
+    shop = await db.get_db().shops.find_one({"ownerPhone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"owner_phone": current_user.phone})
+    if not shop:
+        shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    shop_id = str(shop["_id"])
+    inserted = 0
+    updated = 0
+    for item in body:
+        question = item.get("question")
+        answer = item.get("answer")
+        category = item.get("category", "General")
+        if not question or not answer:
+            continue
+        if not category or category == "General":
+            category = detect_category(question, answer)
+        existing = await db.get_db().knowledge_base.find_one({
+            "shopId": shop_id,
+            "question": {"$regex": f"^{re.escape(question)}$", "$options": "i"}
+        })
+        if existing:
+            await db.get_db().knowledge_base.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"answer": answer, "category": category, "updated_at": datetime.utcnow()}}
+            )
+            updated += 1
+        else:
+            doc = {
+                "shopId": shop_id,
+                "question": question,
+                "answer": answer,
+                "category": category,
+                "is_active": True,
+                "created_at": datetime.utcnow()
+            }
+            await db.get_db().knowledge_base.insert_one(doc)
+            inserted += 1
+    total = inserted + updated
+    return {"inserted": inserted, "updated": updated, "total": total}
+# === CHANGE 3: Delete All Endpoint ===
+@router.delete("/clear-all", response_model=dict)
+async def clear_knowledge_base(current_user: UserInDB = Depends(get_current_user)):
+    shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    shop_id = str(shop["_id"])
+    result = await db.get_db().knowledge_base.delete_many({"shopId": shop_id})
+    return {"message": "Knowledge base cleared", "deleted_count": result.deleted_count}
+# === CHANGE 4: Website Scraping Endpoint ===
+@router.post("/scrape-website", response_model=dict)
+async def scrape_website(
+    body: dict = Body(...),
+    current_user: UserInDB = Depends(get_current_user)
+):
+    url = body.get("url", "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="URL required")
+    if not url.startswith("http"):
+        url = "https://" + url
+    shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+    shop_id = str(shop["_id"])
+    subpages = ["", "/menu", "/about", "/contact", "/faq", "/reservation", "/locations", "/delivery", "/gallery"]
+    scraped_content = ""
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    for sub in subpages:
+        page_url = url.rstrip("/") + sub
+        try:
+            logger.info(f"Scraping: {page_url}")
+            resp = requests.get(page_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                logger.warning(f"Skipping {page_url}: status {resp.status_code}")
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                tag.decompose()
+            text = soup.get_text(separator=" ", strip=True)
+            scraped_content += " " + text
+        except Exception as e:
+            logger.error(f"Error scraping {page_url}: {e}")
+            continue
+        time.sleep(0.5)
+    scraped_content = scraped_content.strip()
+    if len(scraped_content) < 100:
+        raise HTTPException(status_code=400, detail="Could not extract content from website")
+    # Call Azure OpenAI
+    system_prompt = (
+        "You are helping build a WhatsApp chatbot for a Pakistani business."
+    )
+    user_prompt = (
+        "Extract all useful information from this business website and generate 25-35 Question & Answer pairs.\n\n"
+        "Focus on:\n- Prices, charges, fees\n- Menu items / products / services\n- Timing and hours\n- Location and directions\n- Reservation / booking process\n- Delivery information\n- Contact details\n- Special offers or packages\n- FAQs\n\n"
+        "Write questions in Pakistani style (Urdu/English mix).\n"
+        "Examples: 'Price kya hai?', 'Delivery charges kitne hain?'\n\n"
+        "For each Q&A also detect its category from:\n[General, Products, Delivery, Returns, Timing, Billing, Location, Reservations]\n\n"
+        "Return ONLY valid JSON array:\n[
+  {
+    'question': '...',
+    'answer': '...',
+    'category': '...'
+  }
+]")
+    try:
+        response = await ai_service.client.chat.completions.create(
+            model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt + "\n\nWebsite Content:\n" + scraped_content[:12000]}
+            ],
+            temperature=0.2,
+            max_tokens=2000
+        )
+        answer = response.choices[0].message.content.strip()
+        if answer.startswith("```"):
+            answer = answer.split("```")[1]
+            if answer.startswith("json"):
+                answer = answer[4:]
+        answer = answer.strip()
+        qa_pairs = json.loads(answer.replace("'", '"'))
+    except json.JSONDecodeError:
+        logger.error("AI returned invalid JSON for website scraping.")
+        raise HTTPException(status_code=500, detail="AI returned invalid JSON.")
+    except Exception as e:
+        logger.error(f"AI extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"AI extraction failed: {e}")
+    if not isinstance(qa_pairs, list):
+        raise HTTPException(status_code=500, detail="AI did not return a list of Q&A pairs.")
+    inserted = 0
+    updated = 0
+    for qa in qa_pairs:
+        question = qa.get("question")
+        answer = qa.get("answer")
+        category = qa.get("category", "General")
+        if not question or not answer:
+            continue
+        if not category or category == "General":
+            category = detect_category(question, answer)
+        existing = await db.get_db().knowledge_base.find_one({
+            "shopId": shop_id,
+            "question": {"$regex": f"^{re.escape(question)}$", "$options": "i"}
+        })
+        if existing:
+            await db.get_db().knowledge_base.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {"answer": answer, "category": category, "updated_at": datetime.utcnow()}}
+            )
+            updated += 1
+        else:
+            doc = {
+                "shopId": shop_id,
+                "question": question,
+                "answer": answer,
+                "category": category,
+                "is_active": True,
+                "created_at": datetime.utcnow()
+            }
+            await db.get_db().knowledge_base.insert_one(doc)
+            inserted += 1
+    total = inserted + updated
+    return {
+        "message": "Website scraped successfully",
+        "inserted": inserted,
+        "updated": updated,
+        "total": total,
+        "qa_pairs": qa_pairs
+    }
 
 
 @router.put("/{qa_id}", response_model=dict)

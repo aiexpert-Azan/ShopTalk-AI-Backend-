@@ -18,3 +18,5 @@ firebase-admin==6.5.0
 openpyxl
 pypdf
 slowapi==0.1.9
+requests
+beautifulsoup4
