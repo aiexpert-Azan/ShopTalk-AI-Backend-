@@ -304,10 +304,10 @@ async def scrape_website(
     if len(scraped_content) < 100:
         raise HTTPException(status_code=400, detail="Could not extract content from website")
     # Call Azure OpenAI
-        system_prompt = """
+    system_prompt = """
 You are helping build a WhatsApp chatbot for a Pakistani business.
 """
-        user_prompt = """
+    user_prompt = """
 Extract all useful information from this business website and generate 25-35 Question & Answer pairs.
 
 Focus on:
