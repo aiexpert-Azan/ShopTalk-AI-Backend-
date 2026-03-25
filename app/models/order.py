@@ -14,10 +14,11 @@ class OrderBase(BaseModel):
     customer_phone: str = Field(..., alias="customerPhone")
     items: List[OrderItem]
     total_amount: float = Field(..., alias="totalAmount")
-    status: str = "new" # new, processing, ready, completed, rejected
+    status: str = "new" # new, pending_address, processing, ready, completed, rejected
     delivery_method: str = Field("delivery", alias="deliveryMethod")
     payment_method: str = Field("COD", alias="paymentMethod")
     notes: Optional[str] = None
+    deliveryAddress: Optional[str] = None
     
 class OrderTimeline(BaseModel):
     action: str

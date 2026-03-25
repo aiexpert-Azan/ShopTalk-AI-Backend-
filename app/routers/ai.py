@@ -343,73 +343,110 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
         })
         history = conversation.get("messages", []) if conversation else []
 
-        # ── ORDER DETECTION ──
-        intent_data = await detect_order_intent(ai_service, incoming_msg)
-        logger.info(f"Intent detection result: {intent_data}")
 
-        if intent_data.get("type") == "order":
-            # ── ORDER FLOW ──
-            items = intent_data.get("items", [])
-            special_note = intent_data.get("special_note", "")
-            if not items:
-                # AI said order but no items parsed — fall back to chat
-                response_text = await ai_service.generate_response(
-                    shop_context=shop_context,
-                    history=history,
-                    user_message=incoming_msg
-                )
-            else:
-                enriched_items, total = await enrich_order_items(items, shop_id)
-                delivery_fee = 200
-                # Save order to DB
-                order_doc = {
-                    "shopId": shop_id,
-                    "customerPhone": sender_phone,
-                    "customerName": sender_phone,
-                    "items": enriched_items,
-                    "totalAmount": round(total + delivery_fee, 2),
-                    "deliveryFee": delivery_fee,
+        # ── 2-STEP ORDER FLOW ──
+        # Step 2: Check for pending_address order
+        pending_order = await db.get_db().orders.find_one({
+            "customerPhone": sender_phone,
+            "shopId": shop_id,
+            "status": "pending_address"
+        })
+        if pending_order:
+            # Treat incoming message as address
+            address = incoming_msg
+            enriched_items = pending_order.get("items", [])
+            delivery_fee = pending_order.get("deliveryFee", 200)
+            total = pending_order.get("totalAmount", 0)
+            items_text = "\n".join([
+                f"- {i['quantity']}x {i['name']}" + (f" ({i.get('variation','')})" if i.get('variation') else "") + f" — Rs.{int(i['price'] * i['quantity'])}"
+                + (f"\n  Note: {i.get('special_instructions','')}" if i.get('special_instructions') else "")
+                for i in enriched_items
+            ])
+            await db.get_db().orders.update_one(
+                {"_id": pending_order["_id"]},
+                {"$set": {
                     "status": "new",
-                    "deliveryMethod": intent_data.get("delivery_method", "delivery"),
-                    "paymentMethod": "COD",
-                    "createdAt": datetime.utcnow(),
-                    "updatedAt": datetime.utcnow(),
-                    "timeline": [{
-                        "action": "new",
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "message": "Order placed via WhatsApp"
-                    }],
-                    "specialNote": special_note
-                }
-                await db.get_db().orders.insert_one(order_doc)
-                logger.info(f"New order saved for {sender_phone} — Total: Rs.{total + delivery_fee}")
-                # Build confirmation message
-                items_text = "\n".join([
-                    f"- {i['quantity']}x {i['name']}" + (f" ({i['variation']})" if i.get('variation') else "") + f" — Rs.{int(i['price'] * i['quantity'])}"
-                    + (f"\n  Note: {i['special_instructions']}" if i.get('special_instructions') else "")
-                    for i in enriched_items
-                ])
-                response_text = (
-                    f"✅ Aapka order receive ho gaya!\n\n"
-                    f"📦 Order Details:\n"
-                    f"{items_text}\n\n"
-                    f"📝 Note: {special_note}\n"
-                    f"🚚 Delivery Fee: Rs.{delivery_fee}\n"
-                    f"💰 Total: Rs.{int(total + delivery_fee)}\n\n"
-                    f"Hum jald confirm karenge. Shukriya! 🙏"
-                )
-
+                    "deliveryAddress": address,
+                    "updatedAt": datetime.utcnow()
+                },
+                "$push": {"timeline": {
+                    "action": "address_provided",
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "message": f"Delivery address provided: {address}"
+                }}}
+            )
+            response_text = (
+                f"✅ Order confirm ho gaya!\n\n"
+                f"📦 Order Details:\n"
+                f"{items_text}\n\n"
+                f"📍 Address: {address}\n"
+                f"🚚 Delivery Fee: Rs.{delivery_fee}\n"
+                f"💰 Total: Rs.{int(total)}\n"
+                f"⏰ Expected delivery: 45-60 minutes\n\n"
+                f"Hum jald aapko update karenge. Shukriya! 🙏"
+            )
         else:
-            # ── NORMAL Q&A FLOW ──
-            try:
-                response_text = await ai_service.generate_response(
-                    shop_context=shop_context,
-                    history=history,
-                    user_message=incoming_msg
-                )
-            except Exception as e:
-                logger.error(f"AI error: {e}")
-                response_text = "Sorry, I'm having trouble right now. Please try again later."
+            # Step 1: Order detection
+            intent_data = await detect_order_intent(ai_service, incoming_msg)
+            logger.info(f"Intent detection result: {intent_data}")
+            if intent_data.get("type") == "order":
+                items = intent_data.get("items", [])
+                special_note = intent_data.get("special_note", "")
+                if not items:
+                    # AI said order but no items parsed — fall back to chat
+                    response_text = await ai_service.generate_response(
+                        shop_context=shop_context,
+                        history=history,
+                        user_message=incoming_msg
+                    )
+                else:
+                    enriched_items, total = await enrich_order_items(items, shop_id)
+                    delivery_fee = 200
+                    # Save order to DB with pending_address status
+                    order_doc = {
+                        "shopId": shop_id,
+                        "customerPhone": sender_phone,
+                        "customerName": sender_phone,
+                        "items": enriched_items,
+                        "totalAmount": round(total + delivery_fee, 2),
+                        "deliveryFee": delivery_fee,
+                        "status": "pending_address",
+                        "deliveryMethod": intent_data.get("delivery_method", "delivery"),
+                        "paymentMethod": "COD",
+                        "createdAt": datetime.utcnow(),
+                        "updatedAt": datetime.utcnow(),
+                        "timeline": [{
+                            "action": "pending_address",
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "message": "Order placed, waiting for address"
+                        }],
+                        "specialNote": special_note
+                    }
+                    await db.get_db().orders.insert_one(order_doc)
+                    logger.info(f"New order (pending address) saved for {sender_phone} — Total: Rs.{total + delivery_fee}")
+                    items_text = "\n".join([
+                        f"- {i['quantity']}x {i['name']}" + (f" ({i['variation']})" if i.get('variation') else "") + f" — Rs.{int(i['price'] * i['quantity'])}"
+                        + (f"\n  Note: {i['special_instructions']}" if i.get('special_instructions') else "")
+                        for i in enriched_items
+                    ])
+                    response_text = (
+                        f"✅ Aapka order note kar liya!\n\n"
+                        f"📦 Order Details:\n"
+                        f"{items_text}\n"
+                        f"💰 Total: Rs.{int(total + delivery_fee)}\n\n"
+                        f"🏠 Delivery ke liye apna address share karein?\n(Ghar ka address, gali, area, city)"
+                    )
+            else:
+                # ── NORMAL Q&A FLOW ──
+                try:
+                    response_text = await ai_service.generate_response(
+                        shop_context=shop_context,
+                        history=history,
+                        user_message=incoming_msg
+                    )
+                except Exception as e:
+                    logger.error(f"AI error: {e}")
+                    response_text = "Sorry, I'm having trouble right now. Please try again later."
 
         # ── SAVE CONVERSATION ──
         new_messages = history + [

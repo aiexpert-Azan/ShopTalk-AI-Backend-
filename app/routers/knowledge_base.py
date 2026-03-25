@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, Depends, HTTPException, status, Body, UploadFile, File
 from pypdf import PdfReader
 import json
@@ -159,8 +158,6 @@ async def get_knowledge_base(current_user: UserInDB = Depends(get_current_user))
     ).to_list(100)
     return [qa_to_dict(qa) for qa in qa_pairs]
 
-
-
 # === CHANGE 1: Prevent Duplicate Questions (Upsert) ===
 @router.post("/", response_model=dict)
 async def add_qa_pair(
@@ -207,7 +204,6 @@ async def add_qa_pair(
     result = await db.get_db().knowledge_base.insert_one(qa_doc)
     qa_doc["_id"] = result.inserted_id
     return qa_to_dict(qa_doc)
-
 
 # === CHANGE 1: Bulk Upsert Endpoint ===
 @router.post("/bulk-upsert", response_model=dict)
@@ -256,6 +252,7 @@ async def bulk_upsert_qa_pairs(
             inserted += 1
     total = inserted + updated
     return {"inserted": inserted, "updated": updated, "total": total}
+
 # === CHANGE 3: Delete All Endpoint ===
 @router.delete("/clear-all", response_model=dict)
 async def clear_knowledge_base(current_user: UserInDB = Depends(get_current_user)):
@@ -265,6 +262,7 @@ async def clear_knowledge_base(current_user: UserInDB = Depends(get_current_user
     shop_id = str(shop["_id"])
     result = await db.get_db().knowledge_base.delete_many({"shopId": shop_id})
     return {"message": "Knowledge base cleared", "deleted_count": result.deleted_count}
+
 # === CHANGE 4: Website Scraping Endpoint ===
 @router.post("/scrape-website", response_model=dict)
 async def scrape_website(
@@ -282,109 +280,57 @@ async def scrape_website(
     shop_id = str(shop["_id"])
     from urllib.parse import urljoin, urlparse
     scraped_content = ""
-    # Advanced headers for anti-bot bypass
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Cache-Control": "max-age=0",
-    }
+    base_url = url
     session = requests.Session()
-    session.headers.update(headers)
-    # --- Scrape homepage (REQUIRED) ---
+    headers1 = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+    session.headers.update(headers1)
     homepage_html = ""
     try:
-        logger.info(f"Scraping homepage: {url}")
-        resp = session.get(url, timeout=30)
-        # Fallback User-Agent if blocked
-        if resp.status_code in (403, 429) or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
-            logger.warning(f"Blocked on homepage, trying fallback User-Agent")
-            fallback_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
-            session.headers.update({"User-Agent": fallback_ua})
-            resp = session.get(url, timeout=30)
-        if resp.status_code != 200 or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
-            logger.error(f"Homepage failed with status {resp.status_code} or Cloudflare block")
-            raise HTTPException(status_code=400, detail="Could not access homepage of website")
-        homepage_html = resp.text
-        soup = BeautifulSoup(homepage_html, "html.parser")
-        # Remove unwanted tags
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-            tag.decompose()
-        # Extract text from important elements
-        text_parts = []
-        for h in soup.find_all(["h1", "h2", "h3"]):
-            text_parts.append(h.get_text(separator=" ", strip=True))
-        for p in soup.find_all("p"):
-            text_parts.append(p.get_text(separator=" ", strip=True))
-        for li in soup.find_all("li"):
-            text_parts.append(li.get_text(separator=" ", strip=True))
-        for table in soup.find_all("table"):
-            for row in table.find_all("tr"):
-                row_text = " | ".join(cell.get_text(separator=" ", strip=True) for cell in row.find_all(["td", "th"]))
-                if row_text:
-                    text_parts.append(row_text)
-        text_parts.append(soup.get_text(separator=" ", strip=True))
-        scraped_content += "\n".join(text_parts)
-        # --- Find internal links for further scraping ---
-        base_url = url
-        links = soup.find_all("a", href=True)
-        internal_links = []
-        for link in links:
-            href = link["href"]
-            full_url = urljoin(base_url, href)
-            if urlparse(full_url).netloc == urlparse(base_url).netloc:
-                if full_url not in internal_links and full_url != url:
-                    internal_links.append(full_url)
+        logger.info(f"Scraping homepage: {base_url}")
+        response = session.get(base_url, timeout=30)
+        if response.status_code == 200:
+            homepage_html = response.text
+        elif response.status_code in [403, 429]:
+            session.headers.update({
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
+            })
+            response = session.get(base_url, timeout=30)
+            if response.status_code == 200:
+                homepage_html = response.text
+            else:
+                raise HTTPException(status_code=400, detail="Could not access website")
+        elif response.status_code == 404:
+            raise HTTPException(status_code=400, detail="Website returned 404 Not Found")
+        else:
+            raise HTTPException(status_code=400, detail=f"Website returned {response.status_code}")
+    except requests.Timeout:
+        raise HTTPException(status_code=400, detail="Website took too long to respond")
     except Exception as e:
         logger.error(f"Error scraping homepage: {e}")
         raise HTTPException(status_code=400, detail="Could not access homepage of website")
-
-    # --- Scrape up to 5 internal links (OPTIONAL) ---
-    for link in internal_links[:5]:
-        try:
-            logger.info(f"Scraping internal link: {link}")
-            resp = session.get(link, timeout=30)
-            # Fallback User-Agent if blocked
-            if resp.status_code in (403, 429) or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
-                logger.warning(f"Blocked on {link}, trying fallback User-Agent")
-                fallback_ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15"
-                session.headers.update({"User-Agent": fallback_ua})
-                resp = session.get(link, timeout=30)
-            if resp.status_code != 200 or "cloudflare" in resp.text.lower() or "just a moment" in resp.text.lower():
-                logger.warning(f"Skipping {link}: status {resp.status_code} or Cloudflare block")
-                continue
-            soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-                tag.decompose()
-            text_parts = []
-            for h in soup.find_all(["h1", "h2", "h3"]):
-                text_parts.append(h.get_text(separator=" ", strip=True))
-            for p in soup.find_all("p"):
-                text_parts.append(p.get_text(separator=" ", strip=True))
-            for li in soup.find_all("li"):
-                text_parts.append(li.get_text(separator=" ", strip=True))
-            for table in soup.find_all("table"):
-                for row in table.find_all("tr"):
-                    row_text = " | ".join(cell.get_text(separator=" ", strip=True) for cell in row.find_all(["td", "th"]))
-                    if row_text:
-                        text_parts.append(row_text)
-            text_parts.append(soup.get_text(separator=" ", strip=True))
-            scraped_content += "\n".join(text_parts)
-        except Exception as e:
-            logger.error(f"Error scraping {link}: {e}")
-            continue
-        time.sleep(0.5)
-    scraped_content = scraped_content.strip()
-    # If content is empty, error. If < 300 chars, still try to generate Q&A.
-    if not scraped_content:
-        raise HTTPException(status_code=400, detail="Could not extract any content from website")
-    # Call Azure OpenAI
+    # Parse homepage HTML and extract text
+    soup = BeautifulSoup(homepage_html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)
+    if len(text) < 200:
+        raise HTTPException(status_code=400, detail="Could not extract content from website")
+    scraped_content = text
+    # --- Find internal links for further scraping (optional, can keep or remove) ---
+    links = soup.find_all("a", href=True)
+    internal_links = []
+    for link in links:
+        href = link["href"]
+        full_url = urljoin(base_url, href)
+        if urlparse(full_url).netloc == urlparse(base_url).netloc:
+            if full_url not in internal_links and full_url != base_url:
+                internal_links.append(full_url)
+    # (Optional: scrape internal links as before, or skip for simplicity)
+    # --- AI Extraction ---
     system_prompt = """
 You are helping build a WhatsApp chatbot for a Pakistani business.
 You must respond with ONLY a valid JSON array. No explanations. No markdown. No code fences. Start your response with [ and end with ]
@@ -489,7 +435,6 @@ Return ONLY valid JSON array:
         "qa_pairs": qa_pairs
     }
 
-
 @router.put("/{qa_id}", response_model=dict)
 async def update_qa_pair(
     qa_id: str,
@@ -515,7 +460,6 @@ async def update_qa_pair(
     qa = await db.get_db().knowledge_base.find_one({"_id": ObjectId(qa_id)})
     return qa_to_dict(qa)
 
-
 @router.delete("/{qa_id}", response_model=dict)
 async def delete_qa_pair(
     qa_id: str,
@@ -531,4 +475,4 @@ async def delete_qa_pair(
     result = await db.get_db().knowledge_base.delete_one({"_id": ObjectId(qa_id)})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Q&A pair not found")
-    return {"id": qa_id, "deleted": True}
+    return {"message": "Q&A pair deleted", "id": qa_id}
