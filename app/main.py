@@ -25,12 +25,8 @@ async def lifespan(app: FastAPI):
         pass
 
 
-# Environment variable check at startup
+# Environment variable check at startup (Azure OpenAI checks removed)
 required_env_vars = [
-    "AZURE_OPENAI_API_KEY",
-    "AZURE_OPENAI_API_VERSION",
-    "AZURE_OPENAI_ENDPOINT",
-    "AZURE_OPENAI_DEPLOYMENT_NAME",
     "FACEBOOK_APP_ID",
     "FACEBOOK_APP_SECRET",
     "FACEBOOK_REDIRECT_URI"
