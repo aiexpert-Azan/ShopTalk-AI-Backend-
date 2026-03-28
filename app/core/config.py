@@ -10,17 +10,13 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     CORS_ORIGINS: List[str] = ["http://localhost:3000"]
     
-    # Azure Cosmos DB (loaded from .env, never hardcode passwords)
-    COSMOS_HOST: Optional[str] = None
-    COSMOS_USERNAME: Optional[str] = None
-    COSMOS_PASSWORD: Optional[str] = None
-    COSMOS_DB_NAME: Optional[str] = None
 
-    # Azure OpenAI
-    AZURE_OPENAI_API_KEY: str
-    AZURE_OPENAI_ENDPOINT: str
-    AZURE_OPENAI_DEPLOYMENT_NAME: str = "gpt-4"
-    AZURE_OPENAI_API_VERSION: str = "2024-02-15-preview"
+    # MongoDB Atlas
+    MONGODB_URL: Optional[str] = None
+
+    # OpenRouter (OpenAI-compatible)
+    OPENROUTER_API_KEY: str
+    OPENROUTER_MODEL: str
 
     # Mock OTP mode for local testing (legacy)
     MOCK_OTP_MODE: bool = True

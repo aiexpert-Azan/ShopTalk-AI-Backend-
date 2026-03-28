@@ -1,27 +1,17 @@
-from urllib.parse import quote_plus
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from app.core.config import settings
 
-def build_connection_string() -> str:
-    """Build Cosmos DB connection string with properly URL-encoded credentials."""
-    username = quote_plus(settings.COSMOS_USERNAME)
-    password = quote_plus(settings.COSMOS_PASSWORD)
-    host = settings.COSMOS_HOST
-    return (
-        f"mongodb+srv://{username}:{password}@{host}/"
-        f"?tls=true&authMechanism=SCRAM-SHA-256&retrywrites=false&maxIdleTimeMS=120000"
-    )
 
+# Simple MongoDB Atlas connection using MONGODB_URL
 class Database:
     client: AsyncIOMotorClient = None
     _connected: bool = False
 
     def connect(self):
-        """Establish database connection"""
         if not self._connected:
             try:
-                conn_str = build_connection_string()
-                self.client = AsyncIOMotorClient(conn_str, serverSelectionTimeoutMS=5000)
+                self.client = AsyncIOMotorClient(settings.MONGODB_URL, serverSelectionTimeoutMS=5000)
                 self._connected = True
             except Exception as e:
                 print(f"[WARNING] Database connection failed: {e}")
@@ -38,7 +28,9 @@ class Database:
     def get_db(self):
         if not self.client:
             self.connect()
-        return self.client[settings.COSMOS_DB_NAME] if self.client else None
+        # Extract DB name from URL or use a default
+        db_name = settings.MONGODB_URL.rsplit('/', 1)[-1].split('?')[0] if settings.MONGODB_URL else None
+        return self.client[db_name] if self.client and db_name else None
 
 db = Database()
 
