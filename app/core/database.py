@@ -11,7 +11,14 @@ class Database:
     def connect(self):
         if not self._connected:
             try:
-                self.client = AsyncIOMotorClient(settings.MONGODB_URL, serverSelectionTimeoutMS=5000)
+                self.client = AsyncIOMotorClient(
+                    settings.MONGODB_URL,
+                    tls=True,
+                    tlsAllowInvalidCertificates=True,
+                    serverSelectionTimeoutMS=30000,
+                    connectTimeoutMS=30000,
+                    socketTimeoutMS=30000,
+                )
                 self._connected = True
             except Exception as e:
                 print(f"[WARNING] Database connection failed: {e}")
