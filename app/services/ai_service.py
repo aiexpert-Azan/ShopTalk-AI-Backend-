@@ -7,8 +7,7 @@ logger = logging.getLogger(__name__)
 class AIService:
     def __init__(self):
         self.client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=settings.OPENAI_API_KEY,
         )
 
     async def generate_response(self, shop_context: str, history: list, user_message: str):
@@ -38,7 +37,7 @@ class AIService:
         for attempt in range(retries):
             try:
                 response = await self.client.chat.completions.create(
-                    model="meta-llama/llama-3.1-8b-instruct:free",
+                    model=settings.OPENAI_MODEL,
                     messages=messages,
                     temperature=0.7,
                     max_tokens=300

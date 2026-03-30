@@ -14,9 +14,9 @@ class Settings(BaseSettings):
     # MongoDB Atlas
     MONGODB_URL: Optional[str] = None
 
-    # OpenRouter (OpenAI-compatible)
-    OPENROUTER_API_KEY: str
-    OPENROUTER_MODEL: str
+    # OpenAI
+    OPENAI_API_KEY: str
+    OPENAI_MODEL: str = "gpt-4o-mini"
 
     # Mock OTP mode for local testing (legacy)
     MOCK_OTP_MODE: bool = True

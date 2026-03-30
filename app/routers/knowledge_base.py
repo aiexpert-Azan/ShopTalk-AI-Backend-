@@ -78,11 +78,10 @@ async def import_knowledge_base_pdf(
 
     try:
         client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=settings.OPENAI_API_KEY,
         )
         response = await client.chat.completions.create(
-            model=settings.OPENROUTER_MODEL,
+            model=settings.OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=1200
@@ -414,11 +413,10 @@ Return ONLY valid JSON array:
 """
     try:
         client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=settings.OPENAI_API_KEY,
         )
         response = await client.chat.completions.create(
-            model=settings.OPENROUTER_MODEL,
+            model=settings.OPENAI_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt + "\n\nWebsite Content:\n" + scraped_content[:12000]}
