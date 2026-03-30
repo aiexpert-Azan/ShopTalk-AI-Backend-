@@ -1,9 +1,10 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from app.core.deps import get_current_user
 from app.core.database import db
 from app.models.user import UserInDB
 from app.models.shop import ShopCreate, ShopUpdate, ShopResponse, ShopInDB, BusinessHours, DeliverySettings, AIConfig
+from typing import Optional
 
 router = APIRouter()
 
@@ -102,3 +103,28 @@ async def update_ai_config(
         raise HTTPException(status_code=404, detail="Shop not found")
     result["_id"] = str(result["_id"])
     return ShopInDB(**result)
+
+@router.post("/onboarding", response_model=ShopResponse)
+async def shop_onboarding(
+    name: str = Body(...),
+    description: Optional[str] = Body(""),
+    whatsapp_phone_number_id: Optional[str] = Body(""),
+    whatsapp_access_token: Optional[str] = Body(""),
+    current_user: UserInDB = Depends(get_current_user)
+):
+    existing_shop = await db.get_db().shops.find_one({"userId": str(current_user.id)})
+    if existing_shop:
+        existing_shop["_id"] = str(existing_shop["_id"])
+        return ShopInDB(**existing_shop)
+    shop_data = {
+        "userId": str(current_user.id),
+        "name": name,
+        "description": description,
+        "whatsappPhoneNumberId": whatsapp_phone_number_id or "",
+        "whatsappAccessToken": whatsapp_access_token or "",
+        "createdAt": datetime.utcnow(),
+        "updatedAt": datetime.utcnow(),
+    }
+    result = await db.get_db().shops.insert_one(shop_data)
+    shop_data["_id"] = str(result.inserted_id)
+    return ShopInDB(**shop_data)
