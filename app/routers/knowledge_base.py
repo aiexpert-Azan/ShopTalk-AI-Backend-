@@ -15,6 +15,7 @@ from app.core.config import settings
 from typing import List, Optional
 from datetime import datetime
 from bson import ObjectId
+from openai import AsyncOpenAI
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -76,8 +77,12 @@ async def import_knowledge_base_pdf(
     )
 
     try:
-        response = await ai_service.client.chat.completions.create(
-            model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+        response = await client.chat.completions.create(
+            model=settings.OPENROUTER_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=1200
@@ -408,13 +413,17 @@ Return ONLY valid JSON array:
 ]
 """
     try:
-        response = await ai_service.client.chat.completions.create(
-            model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+        response = await client.chat.completions.create(
+            model=settings.OPENROUTER_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt + "\n\nWebsite Content:\n" + scraped_content[:12000]}
             ],
-            temperature=0.2,
+            temperature=0.3,
             max_tokens=2000
         )
         raw_response = response.choices[0].message.content.strip()
