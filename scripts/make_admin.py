@@ -11,7 +11,7 @@ async def set_admin():
     database = db.get_db()
     
     phone = "+923269157985"   # ← apna exact phone number
-    password = "Az@nxh2610s"  # ← apna password
+    password = "azan1234"  # ← apna password
     
     hashed = get_password_hash(password)
     
