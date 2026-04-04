@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     WHATSAPP_ACCESS_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""
+    WEBHOOK_VERIFY_TOKEN: str = ""
     WHATSAPP_WABA_ID: str = ""
 
     # Admin

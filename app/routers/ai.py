@@ -191,7 +191,9 @@ async def whatsapp_webhook_verify(
     hub_challenge: str = Query(None, alias="hub.challenge")
 ):
     logger.info(f"WhatsApp webhook verification: mode={hub_mode}, token={hub_verify_token}")
-    if hub_mode == "subscribe" and hub_verify_token == settings.WHATSAPP_VERIFY_TOKEN:
+    print(f"Expected token: {settings.WEBHOOK_VERIFY_TOKEN}")
+    print(f"Received token: {hub_verify_token}")
+    if hub_mode == "subscribe" and hub_verify_token == settings.WEBHOOK_VERIFY_TOKEN:
         logger.info("WhatsApp webhook verified successfully")
         return PlainTextResponse(content=hub_challenge, status_code=200)
     logger.warning("WhatsApp webhook verification failed")
