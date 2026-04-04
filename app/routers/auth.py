@@ -7,6 +7,7 @@ import logging
 import os
 import json
 import random
+import re
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,6 +25,20 @@ from pathlib import Path
 
 
 # --- Pydantic Models ---
+
+def normalize_phone_number(phone: str) -> str:
+    """Normalize Pakistani phone numbers to +92XXXXXXXXX format."""
+    if not phone:
+        return phone
+
+    cleaned_phone = re.sub(r"[\s\-()]+", "", phone.strip())
+    if cleaned_phone.startswith("+92"):
+        return cleaned_phone
+    if cleaned_phone.startswith("92"):
+        return f"+{cleaned_phone}"
+    if cleaned_phone.startswith("0"):
+        return f"+92{cleaned_phone[1:]}"
+    return cleaned_phone
 
 class VerifyTokenRequest(BaseModel):
     # Frontend snake_case bhej raha he, isliye yahan id_token hi use kiya he
@@ -112,7 +127,8 @@ def initialize_firebase_admin():
 @router.post("/signup", response_model=Token)
 @limiter.limit("3/minute")
 async def signup(request: Request, user: UserCreate):
-    user_exists = await db.get_db().users.find_one({"phone": user.phone})
+    normalized_phone = normalize_phone_number(user.phone)
+    user_exists = await db.get_db().users.find_one({"phone": normalized_phone})
     if user_exists:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone number already registered")
 
@@ -120,6 +136,7 @@ async def signup(request: Request, user: UserCreate):
     user_data = user.model_dump(exclude={"password"})
     user_in_db = {
         **user_data,
+        "phone": normalized_phone,
         "hashed_password": hashed_password,
         "phone_verified": True,
         "plan": "free",
@@ -128,16 +145,18 @@ async def signup(request: Request, user: UserCreate):
     }
 
     await db.get_db().users.insert_one(user_in_db)
-    access_token = create_access_token(data={"sub": user["phone"], "role": user.get("role", None), "phone": user["phone"]})
-    refresh_token = create_refresh_token(data={"sub": user["phone"]})
+    access_token = create_access_token(data={"sub": normalized_phone, "role": user_data.get("role"), "phone": normalized_phone})
+    refresh_token = create_refresh_token(data={"sub": normalized_phone})
     return {"access_token": access_token, "refresh_token": refresh_token, "token_type": "bearer"}
 
 # --- LOGIN ---
 @router.post("/login", response_model=Token)
 @limiter.limit("5/minute")
 async def login(request: Request, form_data: UserLogin):
-    user = await db.get_db().users.find_one({"phone": form_data.phone})
-    if not user or not verify_password(form_data.password, user["hashed_password"]):
+    normalized_phone = normalize_phone_number(form_data.phone)
+    user = await db.get_db().users.find_one({"phone": normalized_phone})
+    hashed_password = user.get("hashed_password") if user else None
+    if not user or not hashed_password or not verify_password(form_data.password, hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Incorrect phone or password")
 
     access_token = create_access_token(data={"sub": user["phone"], "role": user.get("role", None), "phone": user["phone"]})

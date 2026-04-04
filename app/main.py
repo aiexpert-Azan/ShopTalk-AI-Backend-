@@ -1,8 +1,6 @@
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-import logging
-import sys
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import db
@@ -24,17 +22,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-
-# Environment variable check at startup (Azure OpenAI checks removed)
-required_env_vars = [
-    "FACEBOOK_APP_ID",
-    "FACEBOOK_APP_SECRET",
-    "FACEBOOK_REDIRECT_URI"
-]
-missing_vars = [var for var in required_env_vars if not getattr(settings, var, None)]
-if missing_vars:
-    logging.error(f"Missing required environment variables: {missing_vars}")
-    sys.exit(1)
 
 app = FastAPI(
     title=settings.APP_NAME,

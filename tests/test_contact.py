@@ -2,9 +2,6 @@ import os
 
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 os.environ.setdefault("JWT_SECRET_KEY", "test-jwt-secret")
-os.environ.setdefault("FACEBOOK_APP_ID", "test-facebook-app-id")
-os.environ.setdefault("FACEBOOK_APP_SECRET", "test-facebook-app-secret")
-os.environ.setdefault("FACEBOOK_REDIRECT_URI", "https://example.com/callback")
 
 from fastapi.testclient import TestClient
 
@@ -103,6 +100,12 @@ def test_billing_plan_requires_auth():
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Not authenticated"
+
+
+def test_embedded_signup_route_is_removed():
+    response = client.post("/api/whatsapp/embedded-signup", json={"code": "test"})
+
+    assert response.status_code == 404
 
 
 def test_contact_submission_provider_failure(monkeypatch):

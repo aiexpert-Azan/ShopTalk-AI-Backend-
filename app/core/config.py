@@ -1,5 +1,4 @@
 from typing import List, Optional
-from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -41,18 +40,11 @@ class Settings(BaseSettings):
     RATE_LIMIT_WINDOW_SECONDS: int = 60
 
 
-    # Meta WhatsApp Business API
+    # WhatsApp Business API
     WHATSAPP_ACCESS_TOKEN: str = ""
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_VERIFY_TOKEN: str = ""
     WHATSAPP_WABA_ID: str = ""
-    META_APP_ID: str = ""
-
-    # Facebook OAuth (for Embedded Signup)
-    FACEBOOK_APP_ID: str = ""
-    FACEBOOK_APP_SECRET: str = ""
-    FACEBOOK_REDIRECT_URI: str = ""
-    FACEBOOK_CONFIG_ID: str = ""
 
     # Admin
     ADMIN_PHONE_NUMBER: Optional[str] = None
