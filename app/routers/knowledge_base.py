@@ -527,34 +527,3 @@ async def delete_qa_pair(
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Q&A pair not found")
     return {"message": "Q&A pair deleted", "id": qa_id}
-
-@router.get("/meta-webhook")
-def verify_meta_webhook(mode: str = None, challenge: str = None, verify_token: str = None):
-    # Meta (Facebook/WhatsApp) webhook verification
-    # Meta sends GET with hub.mode, hub.challenge, hub.verify_token
-    from fastapi import Request
-    import os
-    from fastapi.responses import PlainTextResponse
-    import typing
-    
-    # Accept query params as per Meta spec
-    def get_query_param(request: Request, key: str) -> typing.Optional[str]:
-        return request.query_params.get(key)
-
-    # This function is compatible with FastAPI's dependency injection
-    def endpoint(request: Request):
-        mode = get_query_param(request, "hub.mode")
-        challenge = get_query_param(request, "hub.challenge")
-        verify_token = get_query_param(request, "hub.verify_token")
-        expected_token = os.getenv("WHATSAPP_VERIFY_TOKEN") or getattr(settings, "WHATSAPP_VERIFY_TOKEN", None)
-        if mode == "subscribe" and verify_token == expected_token:
-            return PlainTextResponse(content=challenge or "", status_code=200)
-        return PlainTextResponse(content="Verification failed", status_code=403)
-    return endpoint
-
-@router.post("/meta-webhook")
-async def handle_meta_webhook(payload: dict = Body(...)):
-    # Handle webhook events from Meta (WhatsApp/Facebook)
-    # Log or process the payload as needed
-    logger.info(f"Received Meta webhook: {json.dumps(payload)[:500]}")
-    return {"status": "received"}

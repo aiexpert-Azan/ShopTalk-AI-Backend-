@@ -20,3 +20,4 @@ pypdf
 slowapi==0.1.9
 requests
 beautifulsoup4
+pytest==8.3.2

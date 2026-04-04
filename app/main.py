@@ -6,7 +6,7 @@ import sys
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.database import db
-from app.routers import auth, shop, products, orders, customers, ai, insights, billing, notifications, whatsapp, knowledge_base, admin
+from app.routers import auth, shop, products, orders, customers, ai, insights, billing, notifications, whatsapp, knowledge_base, admin, contact
 
 
 # --- SlowAPI Rate Limiter ---
@@ -75,6 +75,7 @@ app.include_router(shop.router, prefix="/api/shop", tags=["Shop"])
 app.include_router(whatsapp.router, prefix="/api/whatsapp", tags=["WhatsApp"])
 app.include_router(knowledge_base.router, prefix="/api/knowledge-base", tags=["Knowledge Base"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(contact.router, prefix="/api/contact", tags=["Contact"])
 
 @app.get("/health")
 async def health_check():
