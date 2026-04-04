@@ -27,26 +27,32 @@ def _failure_response(message: str, http_status: int, *, errors: list[Any] | Non
 
 
 @router.post("")
+@router.post("/")
 @limiter.limit("5/minute")
 async def submit_contact(request: Request):
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > MAX_CONTACT_REQUEST_BYTES:
+                logger.warning("Rejected oversized contact request: content_length=%s", content_length)
                 return _failure_response("Request too large", status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
         except ValueError:
+            logger.warning("Rejected contact request with invalid content_length header")
             return _failure_response("Invalid request size", status.HTTP_400_BAD_REQUEST)
 
     try:
         payload = await request.json()
     except json.JSONDecodeError:
+        logger.warning("Rejected contact request with invalid JSON")
         return _failure_response("Invalid JSON payload", status.HTTP_400_BAD_REQUEST)
     except Exception:
+        logger.warning("Rejected contact request body that could not be parsed")
         return _failure_response("Unable to read request body", status.HTTP_400_BAD_REQUEST)
 
     try:
         submission = ContactSubmission.model_validate(payload)
     except ValidationError as exc:
+        logger.warning("Contact validation failed: fields=%s", [error.get("loc") for error in exc.errors()])
         return _failure_response("Validation failed", status.HTTP_422_UNPROCESSABLE_ENTITY, errors=exc.errors())
 
     client_host = request.client.host if request.client else None

@@ -2,9 +2,9 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class ContactSubmission(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
+    name: str = Field(..., min_length=1, max_length=100)
     email: EmailStr
-    message: str = Field(..., min_length=10, max_length=4000)
+    message: str = Field(..., min_length=1, max_length=4000)
 
     model_config = ConfigDict(extra="ignore")
 

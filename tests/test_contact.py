@@ -51,6 +51,25 @@ def test_contact_submission_succeeds(monkeypatch):
     assert len(service.calls) == 1
 
 
+def test_contact_submission_succeeds_with_trailing_slash(monkeypatch):
+    service = DummyEmailService()
+    monkeypatch.setattr(contact_router, "contact_email_service", service)
+
+    response = client.post(
+        "/api/contact/",
+        json={
+            "name": "Jane Doe",
+            "email": "jane@example.com",
+            "message": "I need help with my store setup.",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True, "message": "Message sent successfully"}
+    assert len(service.calls) == 1
+
+
 def test_contact_submission_validation_failure(monkeypatch):
     service = DummyEmailService()
     monkeypatch.setattr(contact_router, "contact_email_service", service)
@@ -70,6 +89,20 @@ def test_contact_submission_validation_failure(monkeypatch):
     assert body["message"] == "Validation failed"
     assert "errors" in body
     assert service.calls == []
+
+
+def test_profile_requires_auth():
+    response = client.get("/api/auth/profile")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
+
+
+def test_billing_plan_requires_auth():
+    response = client.get("/api/billing/plan")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Not authenticated"
 
 
 def test_contact_submission_provider_failure(monkeypatch):
