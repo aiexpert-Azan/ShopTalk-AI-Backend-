@@ -250,7 +250,12 @@ async def whatsapp_webhook(request: Request):
         logger.info(f"Received WhatsApp message from {sender_phone}: {incoming_msg}")
 
         # ── FIND SHOP ──
-        shop = await db.get_db().shops.find_one({"whatsapp_phone_number_id": phone_number_id})
+        shop = await db.get_db().shops.find_one({
+            "$or": [
+                {"whatsapp_phone_number_id": phone_number_id},
+                {"whatsappPhoneNumberId": phone_number_id},
+            ]
+        })
         if not shop:
             logger.critical(f"Data isolation: No shop found for phone_number_id {phone_number_id}. Message ignored.")
             return {"status": "ok"}
@@ -268,8 +273,8 @@ async def whatsapp_webhook(request: Request):
             )
             logger.warning(f"Shop {shop.get('name')} exceeded {plan} plan limit ({used}/{limit})")
 
-            access_token = shop.get("whatsapp_access_token") or settings.WHATSAPP_ACCESS_TOKEN
-            send_phone_id = shop.get("whatsapp_phone_number_id") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
+            access_token = shop.get("whatsapp_access_token") or shop.get("whatsappAccessToken") or settings.WHATSAPP_ACCESS_TOKEN
+            send_phone_id = shop.get("whatsapp_phone_number_id") or shop.get("whatsappPhoneNumberId") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
 
             if access_token and send_phone_id:
                 whatsapp_url = f"https://graph.facebook.com/v22.0/{send_phone_id}/messages"
@@ -473,8 +478,8 @@ If customer writes in Urdu, respond in Urdu. If in English, respond in English."
         )
 
         # ── SEND WHATSAPP REPLY ──
-        access_token = shop.get("whatsapp_access_token") or settings.WHATSAPP_ACCESS_TOKEN
-        send_phone_id = shop.get("whatsapp_phone_number_id") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
+        access_token = shop.get("whatsapp_access_token") or shop.get("whatsappAccessToken") or settings.WHATSAPP_ACCESS_TOKEN
+        send_phone_id = shop.get("whatsapp_phone_number_id") or shop.get("whatsappPhoneNumberId") or phone_number_id or settings.WHATSAPP_PHONE_NUMBER_ID
 
         if access_token and send_phone_id:
             whatsapp_url = f"https://graph.facebook.com/v22.0/{send_phone_id}/messages"

@@ -120,8 +120,8 @@ async def shop_onboarding(
         "userId": str(current_user.id),
         "name": name,
         "description": description,
-        "whatsappPhoneNumberId": whatsapp_phone_number_id or "",
-        "whatsappAccessToken": whatsapp_access_token or "",
+        "whatsapp_phone_number_id": whatsapp_phone_number_id or "",
+        "whatsapp_access_token": whatsapp_access_token or "",
         "createdAt": datetime.utcnow(),
         "updatedAt": datetime.utcnow(),
     }
